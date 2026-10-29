@@ -1,0 +1,1109 @@
+<!doctype html>
+<html lang="th">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>แดชบอร์ดแผนก {{ d.department.name if d.department else dep }} — {{ hospital }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% include "_icons.html" %}
+</head>
+
+{#- โดนัท SVG: items = [{label,value,pct,color}] -#}
+{% macro donut(items, total, unit='ราย', size=150) %}
+{% set r = 15.915 %}
+<svg viewBox="0 0 42 42" width="{{ size }}" height="{{ size }}"
+  style="flex:none;filter:drop-shadow(0 2px 6px rgba(9,31,72,0.08))">
+  <circle cx="21" cy="21" r="{{ r }}" fill="none" stroke="#edf2f7" stroke-width="5.5"></circle>
+  {% set ns = namespace(off=25) %}
+  {% for it in items %}{% if it.pct > 0 %}
+  <circle cx="21" cy="21" r="{{ r }}" fill="none" stroke="{{ it.color }}" stroke-width="5.5"
+    stroke-dasharray="{{ it.pct }} {{ 100 - it.pct }}" stroke-dashoffset="{{ ns.off }}"></circle>
+  {% set ns.off = ns.off - it.pct %}
+  {% endif %}{% endfor %}
+  <text x="21" y="21.5" text-anchor="middle" font-size="8" font-family="var(--font-sans)" font-weight="700"
+    fill="#091f48">{{ total }}</text>
+  <text x="21" y="27" text-anchor="middle" font-size="3.6" font-family="var(--font-sans)" font-weight="500"
+    fill="#64748b">{{ unit }}</text>
+</svg>
+{% endmacro %}
+
+{% macro legend(items, cls='') %}
+<div class="legend {{ cls }}">
+  {% for it in items %}
+  <div class="li"><span class="dot" {{ ('style="background:' ~ it.color ~ ';"') | safe }}></span>
+    <span class="nm" title="{{ it.label }}">{{ it.label }}</span>
+    <span class="vl">{{ it.value | n }} ({{ it.pct | round | int }}%)</span></div>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro delta(v, good_down=false) %}
+  {% if v is none %}<div class="f flat">ไม่มีข้อมูลเทียบช่วงก่อน</div>
+  {% else %}
+    {% set good = (v <= 0) if good_down else (v >= 0) %}
+    <div class="f {{ ' ok' if good else 'bad' }}">{{ '▲' if v >= 0 else '▼' }} {{ v | abs }}%
+      <span class="flat" style="font-weight:400">vs. ช่วงก่อน</span></div>
+  {% endif %}
+  {% endmacro %}
+
+  {% macro target(v, t, unit='นาที', higher_better=false) %}
+  {% if v is none %}<div class="f flat">ไม่มีข้อมูลเวลา</div>
+  {% else %}
+  {% set good = (v >= t) if higher_better else (v <= t) %} <div class="f {{ 'ok' if good else 'bad' }}">เป้าหมาย {{ '≥'
+    if higher_better else '≤' }} {{ t }} {{ unit }}
+</div>
+{% endif %}
+{% endmacro %}
+
+<body class="{{ 'print-mode' if print_mode }}" data-is-today="{{ '1' if d.d1 == d.d2 and d.d1 == today else '0' }}"
+  data-dep="{{ dep }}">
+
+  {% set flow_url = url_for('flow_page') ~ ('?d=' ~ d.d1 if d.d1 == d.d2 else '') %}
+
+  <div class="toolbar">
+    {% set q = '?d1=' ~ d.d1 ~ '&d2=' ~ d.d2 ~ '&dep=' ~ dep %}
+    <a class="live-map" href="{{ flow_url }}"><span class="material-symbols-outlined"
+        style="font-size:1.15em;vertical-align:-2px">view_in_ar</span> ดู Flow 3D</a>
+    {% if export_enabled %}
+    <a class="dl" href="{{ url_for('export', fmt='jpg') }}{{ q }}"><span class="material-symbols-outlined"
+        style="font-size:1.1em;vertical-align:-2px">download</span> JPG</a>
+    <a class="dl" href="{{ url_for('export', fmt='png') }}{{ q }}"><span class="material-symbols-outlined"
+        style="font-size:1.1em;vertical-align:-2px">download</span> PNG</a>
+    <a class="dl" href="{{ url_for('export', fmt='pdf') }}{{ q }}"><span class="material-symbols-outlined"
+        style="font-size:1.1em;vertical-align:-2px">download</span> PDF</a>
+    {% endif %}
+    <span class="stamp">ข้อมูล ณ วันที่ {{ d.generated_at }}</span>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      var f = document.querySelector('.range-form');
+      if (!f) return;
+      var busy = document.querySelector('.quick .busy');
+      var busyText = busy ? busy.querySelector('.busy-text') : null;
+      var btn = f.querySelector('button');
+      var inp1 = f.querySelector('input[name=d1]');
+      var inp2 = f.querySelector('input[name=d2]');
+      var quickLinks = document.querySelectorAll('.quick a');
+
+      function getDaysDiff(d1Str, d2Str) {
+        if (!d1Str || !d2Str) return 0;
+        var t1 = new Date(d1Str).getTime();
+        var t2 = new Date(d2Str).getTime();
+        return Math.round(Math.abs(t2 - t1) / (1000 * 60 * 60 * 24));
+      }
+
+      function hideLoading() {
+        if (busy) {
+          busy.hidden = true;
+          busy.style.display = 'none';
+        }
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">refresh</span> ดึงข้อมูล';
+        }
+        document.body.style.cursor = '';
+      }
+
+      function showLoading(days, label) {
+        if (busy) {
+          if (busyText) {
+            if (days > 30) {
+              busyText.textContent = 'กำลังดึงข้อมูล… (ช่วงหลายสัปดาห์อาจใช้เวลาสักครู่)';
+            } else if (label) {
+              busyText.textContent = 'กำลังดึงข้อมูล' + label + '…';
+            } else {
+              busyText.textContent = 'กำลังดึงข้อมูล…';
+            }
+          }
+          busy.hidden = false;
+          busy.style.display = 'inline-flex';
+        }
+        if (btn) {
+          btn.innerHTML = '<span class="material-symbols-outlined spinning" style="font-size:1.1em;vertical-align:-2px">sync</span> กำลังดึง…';
+          setTimeout(function () { btn.disabled = true; }, 20);
+        }
+        document.body.style.cursor = 'progress';
+      }
+
+      hideLoading();
+      window.addEventListener('pageshow', hideLoading);
+
+      function syncInputsWithShortcuts() {
+        if (!inp1 || !inp2) return;
+        var val1 = inp1.value;
+        var val2 = inp2.value;
+        if (val1 && inp2.type === 'date') inp2.min = val1;
+        if (val2 && inp1.type === 'date') inp1.max = val2;
+
+        quickLinks.forEach(function (a) {
+          if (a.dataset.d1 === val1 && a.dataset.d2 === val2) {
+            a.classList.add('on');
+          } else {
+            a.classList.remove('on');
+          }
+        });
+      }
+
+      if (inp1 && inp2) {
+        inp1.addEventListener('change', syncInputsWithShortcuts);
+        inp2.addEventListener('change', syncInputsWithShortcuts);
+        syncInputsWithShortcuts();
+      }
+
+      f.addEventListener('submit', function (e) {
+        if (inp1 && inp2 && inp1.value && inp2.value && inp1.value > inp2.value) {
+          e.preventDefault();
+          alert('วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด');
+          hideLoading();
+          return;
+        }
+        var days = (inp1 && inp2) ? getDaysDiff(inp1.value, inp2.value) : 0;
+        showLoading(days, '');
+      });
+
+      quickLinks.forEach(function (a) {
+        a.addEventListener('click', function () {
+          var d1 = a.dataset.d1;
+          var d2 = a.dataset.d2;
+          var lbl = a.dataset.label || a.textContent.trim();
+          var days = getDaysDiff(d1, d2);
+          if (a.classList.contains('on')) return;
+          quickLinks.forEach(function (lnk) { lnk.classList.remove('on'); });
+          a.classList.add('on');
+          if (inp1 && d1) inp1.value = d1;
+          if (inp2 && d2) inp2.value = d2;
+          showLoading(days, lbl);
+        });
+      });
+    });
+  </script>
+
+  <div class="sheet">
+
+    <!-- ============================================================ Navigation Bar & Switcher -->
+    <div class="dept-nav-bar no-print">
+      <div class="dept-nav-left">
+        <a class="back-btn" href="{{ url_for('dashboard', d1=d.d1, d2=d.d2) }}">
+          <span class="material-symbols-outlined" style="font-size:18px;line-height:1;">arrow_back</span> OPD Dashboard
+        </a>
+        <div class="dept-badge">
+          <span class="material-symbols-outlined" style="font-size:18px;line-height:1;">home</span>
+          {{ d.department.name if d.department else 'แผนก ' ~ dep }}
+        </div>
+      </div>
+      <div class="dept-select-wrap">
+        <span class="material-symbols-outlined" style="color:#1d4ed8;font-size:20px;line-height:1;">swap_horiz</span>
+        <label for="dept-switcher" style="font-weight:600;">สลับแผนก:</label>
+        <select id="dept-switcher" class="dept-select">
+          {% for x in depts %}
+          <option value="{{ x.dep }}" {{ 'selected' if x.dep==dep }}>{{ x.name }} ({{ x.n | n }} Visit)</option>
+          {% endfor %}
+        </select>
+        {% if drilldown %}
+        <a class="dept-case-btn" href="{{ url_for('cases_page', d1=d.d1, d2=d.d2, dep=dep) }}">
+          <span class="material-symbols-outlined" style="font-size:18px;line-height:1;">list_alt</span> ดูรายเคสแผนกนี้
+          ›
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- ============================================================ Hero -->
+    <div class="hero">
+      <div class="logo"><img src="{{ logo_url }}" alt="ตรา{{ hospital }}"></div>
+      <div>
+        <div class="ttl"><span style="color:#fde047;">OPD</span> DASHBOARD</div>
+        <div class="sub" style="color:#fde047;">แดชบอร์ดงานบริการผู้ป่วยนอก <span style="color: #fff;">|</span> <span
+            style="color:#fff;">{{
+            d.department.name if d.department else 'แผนก ' ~ dep }}</span></div>
+        <div class="quote"><span style="color: #fde047;">DEPARTMENT</span> KAMALASAI HOSPITAL</div>
+      </div>
+      <div class="side">
+        <a class="flow3d" href="{{ flow_url }}" title="ผังผู้ป่วย OPD แบบ 3 มิติ เล่นย้อนหลัง/ดูสด">
+          <span class="flow3d-top"><span class="material-symbols-outlined"
+              style="font-size:1.15em;vertical-align:-2px">view_in_ar</span> ดู Flow 3D</span>
+          <small>ผังผู้ป่วยเคลื่อนไหวตามเวลาจริง</small></a>
+        <div class="badges">
+          <span class="badge g"><span class="material-symbols-outlined"
+              style="font-size:1.05em;vertical-align:-2px">timer</span> ลดเวลารอ</span>
+          <span class="badge s"><span class="material-symbols-outlined"
+              style="font-size:1.05em;vertical-align:-2px">trending_up</span> ประสิทธิภาพแพทย์</span>
+          <span class="badge y" style="color:#ffffff;"><span class="material-symbols-outlined"
+              style="font-size:1.05em;vertical-align:-2px;color:#ffffff;">verified</span> คุณภาพบริการแผนก</span>
+        </div>
+        <div class="meta"><b>{{ d.period_label }}</b><br>ณ วันที่ {{ d.generated_at }}</div>
+      </div>
+    </div>
+
+    <!-- ============================================================ 8 Steps -->
+    <div class="steps">
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">how_to_reg</span></div>
+        <div class="th">1. ลงทะเบียน</div>
+        <div class="en">Registration</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">vital_signs</span></div>
+        <div class="th">2. คัดกรอง</div>
+        <div class="en">Triage</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">chair</span></div>
+        <div class="th">3. รอพบแพทย์</div>
+        <div class="en">Waiting</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">medical_services</span></div>
+        <div class="th">4. พบแพทย์</div>
+        <div class="en">Consultation</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">healing</span></div>
+        <div class="th">5. ตรวจ/หัตถการ</div>
+        <div class="en">Treatment</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">medication</span></div>
+        <div class="th">6. รับยา</div>
+        <div class="en">Pharmacy</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">payments</span></div>
+        <div class="th">7. ชำระเงิน</div>
+        <div class="en">Payment</div>
+      </div>
+      <div class="step">
+        <div class="ic"><span class="material-symbols-outlined">home</span></div>
+        <div class="th">8. กลับบ้าน</div>
+        <div class="en">Discharge</div>
+      </div>
+    </div>
+
+    <!-- ============================================================ 1. KPI Summary -->
+    <section class="block kpi-block">
+      <header>
+        <span class="no">1</span><span class="t">OPD KPI SUMMARY ภาพรวมตัวชี้วัด — {{ d.department.name if d.department
+          else 'แผนก ' ~ dep }}</span>
+        <form class="range-form" method="get">
+          <input type="hidden" name="dep" value="{{ dep }}">
+          <input type="date" name="d1" value="{{ d.d1 }}">
+          <span class="sep">–</span>
+          <input type="date" name="d2" value="{{ d.d2 }}">
+          <button type="submit"><span class="material-symbols-outlined"
+              style="font-size:1.1em;vertical-align:-2px">refresh</span> ดึงข้อมูล</button>
+        </form>
+        <div class="range-label">
+          <span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">calendar_today</span>
+          {{ d.period_label }}
+        </div>
+      </header>
+      <div class="body">
+        <div class="quick">
+          <span class="lbl"><span class="material-symbols-outlined"
+              style="font-size:1.1em;vertical-align:-2px">tune</span> ช่วงด่วน:</span>
+          {% for lbl, a, b in ranges %}
+          <a class="{{ 'on' if a == d.d1 and b == d.d2 }}" data-d1="{{ a }}" data-d2="{{ b }}" data-label="{{ lbl }}"
+            href="{{ url_for('department_page', d1=a, d2=b, dep=dep) }}">{{ lbl }}</a>
+          {% endfor %}
+          <span class="busy" hidden
+            style="margin-left:8px;font-size:12.5px;color:#0284c7;display:none;align-items:center;gap:6px;">
+            <span class="material-symbols-outlined spinning" style="font-size:1.1em;">sync</span>
+            <span class="busy-text">กำลังดึงข้อมูล…</span>
+          </span>
+        </div>
+
+        {% if d.d1 == d.d2 and d.d1 == today %}
+        <div class="live-queue-bar" id="live-queue-bar">
+          <div class="lq-item"><span class="material-symbols-outlined"
+              style="color:var(--blue)">transfer_within_a_station</span> ในแผนกตอนนี้: <b id="live-active">–</b> ราย
+          </div>
+          <div class="lq-item"><span class="material-symbols-outlined" style="color:var(--orange)">chair</span>
+            รอหน้าห้องตรวจ: <b id="live-wait-dr">–</b> ราย</div>
+          <div class="lq-item"><span class="material-symbols-outlined" style="color:var(--sky)">medical_services</span>
+            กำลังตรวจ: <b id="live-in-dr">–</b> ราย</div>
+          <div class="lq-item"><span class="material-symbols-outlined" style="color:var(--purple)">medication</span>
+            รอรับยา: <b id="live-wait-rx">–</b> ราย</div>
+          <div class="lq-item"><span class="material-symbols-outlined" style="color:var(--green)">check_circle</span>
+            จบบริการกลับบ้าน: <b id="live-finished">–</b> ราย</div>
+        </div>
+        {% endif %}
+
+        <div class="kpis">
+          <div class="kpi">
+            <div class="l"><span class="e"><span class="material-symbols-outlined"
+                  style="color:var(--navy);font-size:1.15em;vertical-align:-2px">groups</span></span>ผู้ป่วยทั้งหมดของแผนก
+            </div>
+            <div class="v" id="kpi-total">{{ '{:,}'.format(d.kpi.total) }}</div>
+            <div class="u">ราย{% if d.days > 1 %} (เฉลี่ย {{ d.kpi.per_day }}/วัน){% endif %}</div>
+            {{ delta(d.kpi.total_delta) }}
+          </div>
+          <div class="kpi">
+            <div class="l"><span class="e"><span class="material-symbols-outlined"
+                  style="color:var(--blue);font-size:1.15em;vertical-align:-2px">person_add</span></span>ผู้ป่วยใหม่
+            </div>
+            <div class="v" id="kpi-new">{{ '{:,}'.format(d.kpi.new) }}</div>
+            <div class="u">ราย</div>
+            <div class="f flat">ลงทะเบียนครั้งแรกในช่วงนี้</div>
+          </div>
+          <div class="kpi">
+            <div class="l"><span class="e"><span class="material-symbols-outlined"
+                  style="color:var(--muted);font-size:1.15em;vertical-align:-2px">folder_shared</span></span>ผู้ป่วยเก่า
+            </div>
+            <div class="v" id="kpi-old">{{ '{:,}'.format(d.kpi.old) }}</div>
+            <div class="u">ราย</div>
+            <div class="f flat">มีประวัติในระบบ</div>
+          </div>
+          <div class="kpi">
+            <div class="l"><span class="e"><span class="material-symbols-outlined"
+                  style="color:var(--orange);font-size:1.15em;vertical-align:-2px">schedule</span></span>เวลารวมเฉลี่ย
+            </div>
+            <div class="v" id="kpi-total-time">{{ d.kpi.total_time if d.kpi.total_time is not none else '–' }} นาที
+            </div>
+            <div class="u">ต่อราย (ลงทะเบียน → จบบริการ)</div>
+            {{ target(d.kpi.total_time, d.targets.total) }}
+          </div>
+          <div class="kpi">
+            <div class="l"><span class="e"><span class="material-symbols-outlined"
+                  style="color:var(--sky);font-size:1.15em;vertical-align:-2px">stethoscope</span></span>เวลารอพบแพทย์เฉลี่ย
+            </div>
+            <div class="v" id="kpi-wait-dr">{{ d.kpi.wait_dr if d.kpi.wait_dr is not none else '–' }} นาที</div>
+            <div class="u">ต่อราย (คัดกรองเสร็จ → เข้าห้องตรวจ)</div>
+            {{ target(d.kpi.wait_dr, d.targets.wait_dr) }}
+          </div>
+          <div class="kpi">
+            <div class="l"><span class="e"><span class="material-symbols-outlined"
+                  style="color:var(--green);font-size:1.15em;vertical-align:-2px">verified</span></span>จบบริการภายใน 2
+              ชม.</div>
+            <div class="v" id="kpi-done-pct">{{ d.kpi.done_120_pct }}%</div>
+            <div class="u">ของผู้ป่วยที่มีบันทึกเวลา</div>
+            {{ target(d.kpi.done_120_pct, d.targets.done, '%', true) }}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {% set hrs = d.hourly.hours %}
+    {% set peak = d.hourly.peak %}
+    {% set per = ' (รวม ' ~ d.days ~ ' วัน)' if d.days > 1 else '' %}
+
+    <!-- ====================== 2. hourly | 3. arrival types | 4. patient flow -->
+    <div class="row">
+
+      <!-- 2. จำนวนผู้ป่วยตามเวลา -->
+      <section class="block">
+        <header><span class="no">2</span><span class="t">จำนวนผู้ป่วยตามเวลา (เฉพาะแผนก)</span>
+          {% if peak and peak.total %}<span class="tag">ช่วงพีค {{ peak.range }} น. ({{ peak.total }} ราย)</span>{%
+          endif %}
+        </header>
+        <div class="body">
+          <div class="legend-row">
+            <span><i style="border-color:#1d4ed8;background:#1d4ed8"></i>ผู้ป่วยทั้งหมด</span>
+            <span><i style="border-color:#059669;background:#059669"></i>Walk-in</span>
+            <span><i style="border-color:#ea580c;background:#ea580c"></i>นัดมา</span>
+          </div>
+          {% set L, R, T, B = 34, 458, 12, 236 %}
+          {% set top = nice_max(hrs | map(attribute='total') | max) %}
+          {% set dx = (R - L) / (hrs | length - 1) if (hrs | length > 1) else 1 %}
+          <svg viewBox="0 0 480 262" width="100%" style="display:block;width:100%;height:auto;overflow:visible;">
+            <defs>
+              <linearGradient id="dep-b2-area-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#2563eb" stop-opacity="0.28" />
+                <stop offset="20%" stop-color="#2563eb" stop-opacity="0.21" />
+                <stop offset="42%" stop-color="#3b82f6" stop-opacity="0.13" />
+                <stop offset="68%" stop-color="#38bdf8" stop-opacity="0.06" />
+                <stop offset="88%" stop-color="#38bdf8" stop-opacity="0.02" />
+                <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.00" />
+              </linearGradient>
+              <linearGradient id="dep-b2-total-grad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#1d4ed8" />
+                <stop offset="50%" stop-color="#2563eb" />
+                <stop offset="100%" stop-color="#3b82f6" />
+              </linearGradient>
+              <linearGradient id="dep-b2-walkin-grad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#059669" />
+                <stop offset="50%" stop-color="#059669" />
+                <stop offset="100%" stop-color="#10b981" />
+              </linearGradient>
+              <linearGradient id="dep-b2-appt-grad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#ea580c" />
+                <stop offset="50%" stop-color="#f97316" />
+                <stop offset="100%" stop-color="#fb923c" />
+              </linearGradient>
+              <filter id="dep-b2-glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#2563eb" flood-opacity="0.22" />
+              </filter>
+            </defs>
+            {% for g in range(6) %}
+            {% set y = B - (B - T) * g / 5 %}
+            <line x1="{{ L }}" y1="{{ y }}" x2="{{ R }}" y2="{{ y }}" stroke="#e8ecf2"></line>
+            <text x="{{ L - 6 }}" y="{{ y + 3.5 }}" font-size="10" fill="#6b7280" text-anchor="end">{{ (top * g / 5) |
+              round | int }}</text>
+            {% endfor %}
+            {% for key, color, grad in [('total', '#1d4ed8', 'url(#dep-b2-total-grad)'), ('walkin', '#059669',
+            'url(#dep-b2-walkin-grad)'), ('appt', '#ea580c', 'url(#dep-b2-appt-grad)')] %}
+            {% set pts = [] %}
+            {% for h in hrs %}{% set _ = pts.append((L + dx * loop.index0, B - (B - T) * h[key] / top if top else B))
+            %}{% endfor %}
+            {% set path = smooth_path(pts, B) %}
+            {% if key == 'total' %}
+            <path d="{{ path }} L{{ R }},{{ B }} L{{ L }},{{ B }} Z" fill="url(#dep-b2-area-grad)"></path>
+            {% endif %}
+            <path d="{{ path }}" fill="none" stroke="{{ grad }}" stroke-width="{{ 2.6 if key == 'total' else 1.8 }}"
+              {{ 'filter="url(#dep-b2-glow)"' if key=='total' else '' }}></path>
+            {% if key == 'total' %}{% for x, y in pts %}
+            <circle cx="{{ x }}" cy="{{ y }}" r="3" fill="#ffffff" stroke="{{ color }}" stroke-width="1.8"></circle>
+            {% endfor %}{% endif %}
+            {% endfor %}
+            {% for h in hrs %}{% if loop.index0 % 2 == 0 %}
+            <text x="{{ L + dx * loop.index0 }}" y="{{ B + 16 }}" font-size="10" fill="#6b7280" text-anchor="middle">{{
+              h.label }}</text>
+            {% endif %}{% endfor %}
+          </svg>
+          <div class="note">นับตามเวลาลงทะเบียนของผู้ป่วยแผนกนี้{{ per }}
+            {%- if d.hourly.off_hours %} · นอกช่วง {{ hrs[0].label }}–{{ hrs[-1].label }} อีก <b>{{ d.hourly.off_hours
+              }}</b> ราย{% endif %}</div>
+        </div>
+      </section>
+
+      <!-- 3. จำนวนผู้ป่วยตามประเภทการมา -->
+      {% set appt_c = d.appt.appt_visits %}
+      {% set walkin_c = d.appt.walkin %}
+      {% set appt_pct = (appt_c * 100 / d.kpi.total) | round(1) if d.kpi.total else 0 %}
+      {% set walkin_pct = (walkin_c * 100 / d.kpi.total) | round(1) if d.kpi.total else 0 %}
+      {% set arr_items = [
+      {'label': 'Walk-in ทั่วไป', 'value': walkin_c, 'pct': walkin_pct, 'color': '#059669'},
+      {'label': 'มาตามนัดหมาย', 'value': appt_c, 'pct': appt_pct, 'color': '#1d4ed8'}
+      ] %}
+      <section class="block">
+        <header><span class="no">3</span><span class="t">จำนวนผู้ป่วยตามประเภทการมา (แผนก)</span></header>
+        <div class="body">
+          <div class="donut-wrap">
+            {{ donut(arr_items, d.kpi.total | n) }}
+            {{ legend(arr_items) }}
+          </div>
+          <div class="hbars" style="margin-top:14px;">
+            <div class="hb"><span class="nm">Walk-in ทั่วไป</span>
+              <span class="tr"><span class="fi" {{ ('style="width:' ~ walkin_pct ~ '%;background:#059669;"') | safe }}></span></span>
+            <span class="vl">{{ walkin_c | n }} ({{ walkin_pct }}%)</span></div>
+          <div class="hb"><span class="nm">มาตามนัดหมาย (ovstist)</span>
+            <span class="tr"><span class="fi" {{ ('style="width:' ~ appt_pct ~ '%;background:#1d4ed8;"') | safe }}></span></span>
+            <span class="vl">{{ appt_c | n }} ({{ appt_pct }}%)</span></div>
+        </div>
+        <div class="note">จำแนกตามสถานะการมา (ovst.ovstist) ในช่วงที่เลือก · รวมทั้งสิ้น {{ d.kpi.total | n }} ราย</div>
+      </div>
+    </section>
+
+    <!-- 4. Patient Flow -->
+    <section class="block">
+      <header>
+        <span class="no">4</span><span class="t">OPD Patient Flow (เส้นทางผู้ป่วยเฉพาะแผนก)</span>
+        <a class="tag flow3d-tag" href="{{ flow_url }}" title="เปิดผัง 3D เฉพาะแผนก">
+          <span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">view_in_ar</span> ดู Flow 3D ›
+        </a>
+      </header>
+      <div class="body">
+        <div class="flow">
+          {% for s in d.flow.steps %}
+          <div class="fr">
+            <span class="nm"><span class="material-symbols-outlined" {{ ('style="font-size:1.2em;vertical-align:-2px;color:' ~ s.color ~ ';"') | safe }}>{{ s.icon }}</span>{{ s.label }}</span>
+            <span class="tr"><span class="fi" {{ ('style="width:' ~ ([s.pct, 100] | min) ~ '%;background:' ~ s.color ~ ';"') | safe }}>{{ '{:,}'.format(s.value) }}</span></span>
+            <span class="pc" {{ ('style="color:' ~ s.color ~ ';"') | safe }}>{{ s.pct }}%</span>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="note">จำนวน visit ที่มีบันทึกเวลาในแต่ละขั้น · Admit ต่อ <b>{{ d.flow.admitted | n }}</b> ราย
+          {%- if d.flow.refer %} · ส่งต่อสถานพยาบาลอื่น (Refer Out) <b>{{ d.flow.refer | n }}</b> ราย{% endif %}</div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ====================== 5. SLA | 6. Doctors in Dept | 7. Appt -->
+  <div class="row">
+
+    <!-- 5. วิเคราะห์เวลารอแต่ละขั้นตอน (SLA แผนก) -->
+    <section class="block">
+      <header><span class="no">5</span><span class="t">การวิเคราะห์เวลารอในแต่ละขั้นตอน (SLA แผนก)</span></header>
+      <div class="body">
+        <table class="t dense">
+          <tr><th>ขั้นตอนบริการ</th><th>นาทีเฉลี่ย</th><th>เป้าหมาย</th><th>สถานะ</th><th class="c">ผู้ป่วยที่มีเวลา</th></tr>
+          {% for s in d.sla %}
+          <tr>
+            <td>{{ s.label }}</td>
+            <td><b>{{ s.avg if s.avg is not none else ' –' }}</b> นาที</td>
+                  <td>≤ {{ s.target }} นาที</td>
+                  <td>{% if s.ok is none %}<span class="tag">ไม่มีข้อมูล</span>
+                    {% elif s.ok %}<span class="tag ok"><span class="material-symbols-outlined"
+                        style="font-size:1em;vertical-align:-1px">check</span> ผ่าน</span>
+                    {% else %}<span class="tag bad"><span class="material-symbols-outlined"
+                        style="font-size:1em;vertical-align:-1px">close</span> เกินเป้า</span>{% endif %}</td>
+                  <td class="c">{{ s.n | n }}</td>
+                  </tr>
+                  {% endfor %}
+                  </table>
+                  <div class="note">คำนวณจาก timestamp ใน service_time ของ visit ที่แผนกนี้</div>
+            </div>
+      </section>
+
+      <!-- 6. ประสิทธิภาพแพทย์ที่ออกตรวจในแผนก (Top 5) -->
+      <section class="block">
+        <header><span class="no">6</span><span class="t">ประสิทธิภาพแพทย์ที่ออกตรวจในแผนก (Top 5)</span></header>
+        <div class="body">
+          {% if d.department_doctors %}
+          <table class="t dense">
+            <tr>
+              <th>แพทย์ผู้ตรวจ</th>
+              <th class="c">จำนวนตรวจ</th>
+              <th>รอพบแพทย์</th>
+              <th>เวลาตรวจ/เคส</th>
+            </tr>
+            {% for doc in d.department_doctors %}
+            <tr>
+              <td><b>{{ doc.name }}</b></td>
+              <td class="c" data-v="{{ doc.count }}">{{ doc.count | n }} เคส</td>
+              <td class="{{ 'bad' if doc.wait_dr is not none and doc.wait_dr > d.targets.wait_dr }}">{{ doc.wait_dr ~ '
+                นาที' if doc.wait_dr is not none else '–' }}</td>
+              <td>{{ doc.exam_m ~ ' นาที' if doc.exam_m is not none else '–' }}</td>
+            </tr>
+            {% endfor %}
+          </table>
+          <div class="hbars" style="margin-top:10px;">
+            {% for doc in d.department_doctors %}
+            <div class="hb"><span class="nm">{{ doc.name }}</span>
+              <span class="tr"><span class="fi" {{ ('style="width:' ~ doc.bar ~ '%;background:#1d4ed8;"') | safe }}></span></span>
+            <span class="vl">{{ doc.count | n }}</span></div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state" style="padding:24px;text-align:center;color:#64748b;">
+          <span class="material-symbols-outlined" style="font-size:2.5em;color:#94a3b8">medical_information</span>
+          <p>ไม่พบข้อมูลระบุแพทย์ในบันทึก visit ของแผนกนี้ (หรือเป็นจุดบริการของพยาบาล/คัดกรอง)</p>
+        </div>
+        {% endif %}
+        <div class="note">อ้างอิงจาก ovst.doctor และ service_time (service5 → service12) ของแผนกนี้</div>
+      </div>
+    </section>
+
+    <!-- 7. การนัดหมาย -->
+    <section class="block">
+      <header><span class="no">7</span><span class="t">การนัดหมาย (Appointment แผนก)</span></header>
+      <div class="body">
+        {% if d.appt.booked %}
+        <div class="donut-wrap">
+          {{ donut(d.appt[' items'], d.appt.booked | n, 'นัด' ) }} {{ legend(d.appt['items']) }} </div>
+                  <div class="minis" style="margin-top:14px;">
+                    <div class="mini">
+                      <div class="l">อัตรามาตามนัด</div>
+                      <div class="v ok">{{ d.appt.show_rate }}%</div>
+                    </div>
+                    <div class="mini">
+                      <div class="l">อัตราผิดนัด (No-show)</div>
+                      <div
+                        class="v {{ 'bad' if d.appt.noshow_rate and d.appt.noshow_rate > d.targets.noshow else 'ok' }}">
+                        {{ d.appt.noshow_rate }}%</div>
+                      <div class="f">เป้าหมาย ≤ {{ d.targets.noshow }}%</div>
+                    </div>
+                  </div>
+                  <div class="note">นับจากตาราง oapp ที่ตรงกับแผนกนี้ · นัดทั้งหมด <b>{{ d.appt.booked | n }}</b> นัด
+                    (มาตามนัด {{ d.appt.came | n }})</div>
+                  {% else %}
+                  <div class="empty-state" style="padding:24px;text-align:center;color:#64748b;">
+                    <span class="material-symbols-outlined" style="font-size:2.5em;color:#94a3b8">event_busy</span>
+                    <p>ไม่มีรายการนัดหมายสำหรับแผนกนี้ในช่วงที่เลือก</p>
+                  </div>
+                  {% endif %}
+            </div>
+      </section>
+
+    </div>
+
+    <!-- ====================== 8. Profile | 9. Peak Hour | 10. Alert -->
+    <div class="row">
+
+      <!-- 8. สิทธิการรักษา และกลุ่มโรคหลัก -->
+      <section class="block">
+        <header><span class="no">8</span><span class="t">สิทธิการรักษา และกลุ่มโรคหลัก (แผนก)</span></header>
+        <div class="body">
+          <div class="ttl-sub" style="font-weight:600;font-size:13.5px;color:var(--navy);margin-bottom:8px;">
+            สิทธิการรักษา (Top 5)</div>
+          <div class="donut-wrap" style="margin-bottom:14px;">
+            {{ donut(d.profile.rights, d.kpi.total | n) }}
+            {{ legend(d.profile.rights) }}
+          </div>
+          <div class="ttl-sub" style="font-weight:600;font-size:13.5px;color:var(--navy);margin-bottom:6px;">
+            กลุ่มโรคหลัก (Top 5 ICD-10)</div>
+          <div class="hbars">
+            {% for dx in d.profile.dx %}
+            <div class="hb"><span class="nm" title="{{ dx.code }} {{ dx.label }}">{{ dx.code }} {{ dx.label }}</span>
+              <span class="tr"><span class="fi" {{ ('style="width:' ~ dx.bar ~ '%;background:#0284c7;"') | safe }}></span></span>
+            <span class="vl">{{ dx.value | n }}</span></div>
+          {% endfor %}
+        </div>
+        <div class="note">การวินิจฉัยหลัก (Diagtype 1) จาก ovstdiag ของผู้ป่วยแผนกนี้</div>
+      </div>
+    </section>
+
+    <!-- 9. ช่วงเวลาที่หนาแน่นที่สุด (Peak Hour) -->
+    <section class="block">
+      <header><span class="no">9</span><span class="t">ช่วงเวลาที่หนาแน่นที่สุด (Peak Hour)</span></header>
+      <div class="body">
+        {% if peak %}
+        <div class="peak-box" style="text-align:center;padding:18px;background:linear-gradient(135deg, rgba(29,78,216,0.06), rgba(2,132,199,0.06));border-radius:var(--radius-md);margin-bottom:12px;">
+          <div style="font-size:13px;color:#64748b;font-weight:600;">ชั่วโมงพีคสูงสุดของแผนก</div>
+          <div style="font-size:32px;font-weight:800;color:#1d4ed8;margin:4px 0;">{{ peak.range }} น.</div>
+          <div style="font-size:15px;color:#0f172a;font-weight:600;">ผู้ป่วยสะสม <b>{{ peak.total | n }}</b> ราย (เฉลี่ย <b>{{ d.hourly.peak_per_day }}</b> ราย/วัน)</div>
+        </div>
+        <div class="minis">
+          <div class="mini"><div class="l">Walk-in ในช่วงพีค</div><div class="v">{{ peak.walkin | n }}</div></div>
+          <div class="mini"><div class="l">นัดมาในช่วงพีค</div><div class="v" style="color:#ea580c;">{{ peak.appt | n }}</div></div>
+        </div>
+        {% else %}
+        <p style="color:#64748b;">ไม่มีข้อมูลช่วงพีค</p>
+        {% endif %}
+        <div class="note">ชั่วโมงที่มีผู้ป่วยลงทะเบียนเข้าแผนกนี้มากที่สุดในแต่ละวัน</div>
+      </div>
+    </section>
+
+    <!-- 10. OPD ALERT & ACTION -->
+    <section class="block">
+      <header><span class="no">10</span><span class="t">OPD ALERT & ACTION (แจ้งเตือนเฉพาะแผนก)</span></header>
+      <div class="body">
+        <table class="t dense">
+          <tr><th>เรื่องที่ต้องติดตาม</th><th class="c">ค่าปัจจุบัน</th><th>เป้าหมาย</th><th>สถานะ</th></tr>
+          {% for al in d.alerts %}
+          <tr>
+            <td>
+              <span class="material-symbols-outlined al-ic-{{ al.level }}">
+                {{ ' warning' if al.level=='high' else ('error_outline' if al.level=='mid' else 'check_circle' ) }}
+                  </span>
+                  {{ al.issue }}
+                  </td>
+                  <td class="c"><b>{{ al.value }}</b></td>
+                  <td>{{ al.target }}</td>
+                  <td>
+                    <span class="pill {{ al.level }}">{{ 'ต้องปรับปรุง' if al.level == 'high' else ('เฝ้าระวัง' if
+                      al.level == 'mid' else 'ปกติ') }}</span>
+                  </td>
+                  </tr>
+                  {% endfor %}
+                  </table>
+                  <div class="note">ต้องปรับปรุง = เกินเป้า ≥ 1.5 เท่า · เฝ้าระวัง = เกินเป้าเล็กน้อย</div>
+            </div>
+      </section>
+
+    </div>
+
+    <!-- ============================================ Bottleneck Analysis Header -->
+    {% set bn = d.bn %}
+    {% set LVL = {'high': '#dc3545', 'mid': '#f47b16', 'ok': '#1e8e5a', 'na': '#cbd5e1'} %}
+    <div class="section-h">
+      <span class="ic"><span class="material-symbols-outlined" style="font-size:28px">manage_search</span></span>
+      <div>
+        <div class="t">BOTTLENECK ANALYSIS วิเคราะห์คอขวดบริการผู้ป่วยนอก — {{ d.department.name if d.department else
+          'แผนก ' ~ dep }}</div>
+        <div class="s">ติดตามผลการปรับปรุง 3 จุด: ผู้ป่วยมาก่อนแพทย์เริ่มตรวจ · รอผล Lab ก่อนพบแพทย์ · คิวรับยาช่วงสาย —
+          ช่วง 06:00–17:00 น.{{ per }}</div>
+      </div>
+    </div>
+
+    <!-- ===================== 11. arrivals vs exam | 12. appointment slots -->
+    <div class="row r21">
+
+      <!-- 11. ผู้ป่วยมาถึง vs แพทย์เริ่มตรวจ รายชั่วโมง -->
+      <section class="block">
+        <header><span class="no">11</span><span class="t">ผู้ป่วยมาถึง vs แพทย์เริ่มตรวจ รายชั่วโมง</span>
+          {% if bn.dr.first_avg %}<span class="tag">แพทย์เริ่มตรวจคนแรก ~{{ bn.dr.first_avg }} น.</span>{% endif %}
+        </header>
+        <div class="body">
+          {% set w = bn.dr.worst_wait %}
+          <div class="minis">
+            <div class="mini">
+              <div class="l">มาถึง 06:00–08:59 น.</div>
+              <div class="v">{{ bn.dr.early_pct }}%</div>
+              <div class="u">{{ bn.dr.early | n }} ราย จากทั้งหมดที่มาในเวลา</div>
+            </div>
+            <div class="mini">
+              <div class="l">แพทย์เริ่มตรวจคนแรกของวัน</div>
+              <div class="v">{{ bn.dr.first_avg ~ ' น.' if bn.dr.first_avg else '–' }}</div>
+              <div class="u">เฉลี่ย {{ bn.dr.first_days }} วันทำการ (ไม่นับ ER)</div>
+            </div>
+            <div class="mini">
+              <div class="l">ชั่วโมงที่ตรวจมากที่สุด</div>
+              <div class="v">{{ bn.dr.peak_exam.range ~ ' น.' if bn.dr.peak_exam else '–' }}</div>
+              <div class="u">{% if bn.dr.peak_exam %}เริ่มตรวจ {{ bn.dr.peak_exam.exam | n }} ราย{% endif %}</div>
+            </div>
+            <div class="mini warn">
+              <div class="l">รอพบแพทย์นานที่สุด</div>
+              <div class="v">{{ w.wait ~ ' นาที' if w else '–' }}</div>
+              <div class="u">{% if w %}กลุ่มที่มาถึง {{ w.range }} น.{% endif %}</div>
+            </div>
+          </div>
+          <div class="legend-row" style="margin-top:10px">
+            <span><b class="sq" style="background:#7aaaf0"></b>ผู้ป่วยมาถึง (ลงทะเบียน)</span>
+            <span><b class="sq" style="background:#1e8e5a"></b>แพทย์เริ่มตรวจ (service5)</span>
+            <span><i style="border-color:#f47b16"></i>รอพบแพทย์เฉลี่ย (นาที, แกนขวา) ตามชั่วโมงที่มาถึง</span>
+          </div>
+          {% set H = bn.dr.hours %}
+          {% set L, R, T, B = 44, 920, 16, 236 %}
+          {% set top = nice_max([H | map(attribute='arrive') | max, H | map(attribute='exam') | max] | max) %}
+          {% set top2 = nice_max(H | selectattr('wait') | map(attribute='wait') | list | max if H | selectattr('wait') |
+          list else 0) %}
+          {% set bw = (R - L) / (H | length) if (H | length > 0) else 1 %}
+          <svg viewBox="0 0 960 266" width="100%" style="display:block;width:100%;height:auto;overflow:visible;">
+            <defs>
+              <linearGradient id="dep-b11-arrive-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#60a5fa" />
+                <stop offset="40%" stop-color="#3b82f6" />
+                <stop offset="75%" stop-color="#2563eb" />
+                <stop offset="100%" stop-color="#1d4ed8" />
+              </linearGradient>
+              <linearGradient id="dep-b11-exam-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#34d399" />
+                <stop offset="40%" stop-color="#10b981" />
+                <stop offset="75%" stop-color="#059669" />
+                <stop offset="100%" stop-color="#047857" />
+              </linearGradient>
+              <linearGradient id="dep-b11-wait-grad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#ea580c" />
+                <stop offset="50%" stop-color="#f97316" />
+                <stop offset="100%" stop-color="#fb923c" />
+              </linearGradient>
+              <filter id="dep-b11-wait-glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#ea580c" flood-opacity="0.28" />
+              </filter>
+            </defs>
+            {% for g in range(6) %}
+            {% set y = B - (B - T) * g / 5 %}
+            <line x1="{{ L }}" y1="{{ y }}" x2="{{ R }}" y2="{{ y }}" stroke="#e8ecf2"></line>
+            <text x="{{ L - 6 }}" y="{{ y + 3.5 }}" font-size="11" fill="#6b7280" text-anchor="end">{{ (top * g / 5) |
+              round | int }}</text>
+            <text x="{{ R + 6 }}" y="{{ y + 3.5 }}" font-size="11" fill="#ea580c" font-weight="600">{{ (top2 * g / 5) |
+              round | int }}</text>
+            {% endfor %}
+            {% set pts = [] %}
+            {% for h in H %}
+            {% set x = L + bw * loop.index0 %}
+            {% set ha = (B - T) * h.arrive / top if top else 0 %}
+            {% set he = (B - T) * h.exam / top if top else 0 %}
+            <rect x="{{ x + bw * 0.12 }}" y="{{ B - ha }}" width="{{ bw * 0.37 }}" height="{{ ha }}" rx="3"
+              fill="url(#dep-b11-arrive-grad)"></rect>
+            <rect x="{{ x + bw * 0.51 }}" y="{{ B - he }}" width="{{ bw * 0.37 }}" height="{{ he }}" rx="3"
+              fill="url(#dep-b11-exam-grad)"></rect>
+            {% if h.arrive %}<text x="{{ x + bw * 0.305 }}" y="{{ B - ha - 4 }}" font-size="10" fill="#1e40af"
+              font-weight="600" text-anchor="middle">{{ h.arrive | n }}</text>{% endif %}
+            {% if h.exam %}<text x="{{ x + bw * 0.695 }}" y="{{ B - he - 4 }}" font-size="10" fill="#065f46"
+              font-weight="600" text-anchor="middle">{{ h.exam | n }}</text>{% endif %}
+            <text x="{{ x + bw / 2 }}" y="{{ B + 16 }}" font-size="11" fill="#6b7280" text-anchor="middle">{{ h.label
+              }}:00</text>
+            {% if h.wait is not none and top2 %}{% set _ = pts.append((x + bw / 2, B - (B - T) * h.wait / top2, h.wait))
+            %}{% endif %}
+            {% endfor %}
+            {% if pts | length > 1 %}
+            <polyline points="{% for x, y, v in pts %}{{ x }},{{ y }} {% endfor %}" fill="none"
+              stroke="url(#dep-b11-wait-grad)" stroke-width="2.6" filter="url(#dep-b11-wait-glow)"></polyline>
+            {% endif %}
+            {% for x, y, v in pts %}
+            <circle cx="{{ x }}" cy="{{ y }}" r="3.6" fill="#ffffff" stroke="#ea580c" stroke-width="2.2"></circle>
+            <text x="{{ x }}" y="{{ y - 8 }}" font-size="11.5" font-weight="700" fill="#c2410c" text-anchor="middle"
+              stroke="#fff" stroke-width="3" paint-order="stroke">{{ v }}</text>
+            {% endfor %}
+            <text x="{{ R }}" y="{{ B + 30 }}" font-size="10" fill="#6b7280" text-anchor="end">ชั่วโมง (น.)</text>
+          </svg>
+          <div class="note">แท่งฟ้า = ลงทะเบียนในชั่วโมงนั้น · แท่งเขียว = แพทย์เริ่มตรวจในชั่วโมงนั้น · เส้นส้ม =
+            คัดกรองเสร็จ → เข้าห้องตรวจ (ตัดค่าติดลบ/เกิน 6 ชม.) —
+            ช่องว่างระหว่างแท่งฟ้าช่วงเช้ากับแท่งเขียวคือคิวที่สะสม</div>
+        </div>
+      </section>
+
+      <!-- 12. การกระจายเวลานัดหมาย -->
+      <section class="block">
+        <header><span class="no">12</span><span class="t">การกระจายเวลานัดหมาย (Slots)</span></header>
+        <div class="body">
+          {% set m = bn.appt.main %}
+          <div class="rate-box" style="margin-top:0">
+            <div class="h">นัดหมายที่ตกในช่วงนี้ {{ bn.appt.total | n }} ราย — นัดเวลาเดียวกันมากที่สุด</div>
+            <div class="v" {{
+              ('style="color:' ~ ('#dc2626' if m and m.pct >= 50 else '#1d4ed8') ~ ';"') | safe }}>{{ m.pct ~ ' %' if m
+              else '–' }}</div>
+              <div class="s">{% if m %}นัดเวลา <b>{{ m.label }}</b> {{ m.value | n }} ราย{% endif %}</div>
+            </div>
+            <div class="hbars" style="margin-top:14px">
+              {% for s in bn.appt.slots %}
+              <div class="hb appt"><span class="nm">{{ s.label }}</span>
+                <span class="tr"><span class="fi" {{
+                    ('style="width:' ~ s.bar ~ '%;background:' ~ ('#94a3b8' if s.muted else ('linear-gradient(90deg, #dc2626 0%, #e83333 50%, #ef4444 100%)' if loop.first else 'linear-gradient(90deg, #1d4ed8 0%, #2563eb 50%, #3b82f6 100%)')) ~ ';"') | safe }}></span></span>
+            <span class="vl">{{ s.value | n }} <small>({{ s.pct }}%)</small></span></div>
+          {% endfor %}
+        </div>
+        <div class="note">จาก oapp.nexttime ของนัดที่ตกในช่วงวันที่เลือก · กระจายเวลานัดเป็นช่วง ๆ ช่วยลดคิวสะสมช่วงเช้า</div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ================ 13. lab TAT | 14. screening with lab | 15. pharmacy -->
+  <div class="row">
+
+    <!-- 13. Lab TAT ผู้ป่วยนอก -->
+    <section class="block">
+      <header><span class="no">13</span><span class="t">Lab TAT ผู้ป่วยนอกของแผนก</span>
+        {% if bn.lab.avg is not none %}<span class="tag {{ ' red' if bn.lab.avg> bn.lab.target }}">เฉลี่ย {{ bn.lab.avg
+                    }} นาที (เป้า ≤ {{ bn.lab.target }})</span>{% endif %}
+                  </header>
+                  <div class="body">
+                    <div class="legend-row">
+                      <span><b class="sq"
+                          style="background:linear-gradient(135deg, #fbbf24 0%, #f7ad16 50%, #f59e0b 100%)"></b>สั่ง →
+                        รับสิ่งส่งตรวจ</span>
+                      <span><b class="sq"
+                          style="background:linear-gradient(135deg, #38bdf8 0%, #2563eb 55%, #1d4ed8 100%)"></b>รับ →
+                        รายงานผล</span>
+                      <span><b class="sq dash"></b>เป้า ≤ {{ bn.lab.target }} นาที</span>
+                    </div>
+                    {% set H = bn.lab.hours %}
+                    {% set L, R, T, rh = 78, 430, 8, 21 %}
+                    {% set top = nice_max(([bn.lab.target] + H | map(attribute='o2p') | select | list + H |
+                    map(attribute='o2r') | select | list) | max * 1.25, 4) %}
+                    {% set B = T + rh * (H | length) %}
+                    <svg viewBox="0 0 480 {{ B + 24 }}" width="100%"
+                      style="display:block;width:100%;height:auto;overflow:visible;">
+                      <defs>
+                        <linearGradient id="dep-b13-order-grad" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stop-color="#fbbf24" />
+                          <stop offset="50%" stop-color="#f7ad16" />
+                          <stop offset="100%" stop-color="#f59e0b" />
+                        </linearGradient>
+                        <linearGradient id="dep-b13-report-grad" x1="0" y1="0" x2="1" y2="0">
+                          <stop offset="0%" stop-color="#38bdf8" />
+                          <stop offset="45%" stop-color="#2563eb" />
+                          <stop offset="100%" stop-color="#1d4ed8" />
+                        </linearGradient>
+                      </defs>
+                      {% for g in range(5) %}
+                      {% set x = L + (R - L) * g / 4 %}
+                      <line x1="{{ x }}" y1="{{ T }}" x2="{{ x }}" y2="{{ B }}" stroke="#e8ecf2"></line>
+                      <text x="{{ x }}" y="{{ B + 14 }}" font-size="10" fill="#6b7280" text-anchor="middle">{{ (top * g
+                        / 4) | round | int }}</text>
+                      {% endfor %}
+                      {% for h in H %}
+                      {% set y = T + rh * loop.index0 %}
+                      <text x="{{ L - 6 }}" y="{{ y + rh * 0.66 }}" font-size="11" fill="#374151" text-anchor="end">{{
+                        h.label }} <tspan fill="#9aa3b2" font-size="9.5">({{ h.n | n }})</tspan></text>
+                      {% if h.o2p is not none %}
+                      {% set w1 = (R - L) * (h.o2r or 0) / top if top else 0 %}
+                      {% set w2 = (R - L) * (h.r2p or 0) / top if top else 0 %}
+                      <rect x="{{ L }}" y="{{ y + 3 }}" width="{{ w1 }}" height="{{ rh - 6 }}"
+                        fill="url(#dep-b13-order-grad)" rx="3"></rect>
+                      <rect x="{{ L + w1 }}" y="{{ y + 3 }}" width="{{ w2 }}" height="{{ rh - 6 }}"
+                        fill="url(#dep-b13-report-grad)" rx="3"></rect>
+                      <text x="{{ L + w1 + w2 + 5 }}" y="{{ y + rh * 0.68 }}" font-size="11" font-weight="700"
+                        fill="{{ LVL[h.level] }}">{{ h.o2p }}</text>
+                      {% else %}
+                      <text x="{{ L + 5 }}" y="{{ y + rh * 0.68 }}" font-size="10" fill="#9aa3b2">–</text>
+                      {% endif %}
+                      {% endfor %}
+                      {% set xt = L + (R - L) * bn.lab.target / top if top else L %}
+                      <line x1="{{ xt }}" y1="{{ T - 4 }}" x2="{{ xt }}" y2="{{ B }}" stroke="#dc2626"
+                        stroke-width="1.4" stroke-dasharray="4 3"></line>
+                      <text x="{{ R + 40 }}" y="{{ B + 14 }}" font-size="9.5" fill="#6b7280"
+                        text-anchor="end">นาที</text>
+                    </svg>
+                    <div class="note">ตัวเลขท้ายแท่ง = สั่ง → รายงานผล (นาที) · (จำนวนใบสั่ง) · เฉพาะ visit
+                      แผนกนี้ที่ไม่ admit ที่สั่ง-รับ-รายงานผลในวันเดียวกัน
+                      {%- if bn.lab.worst %} · นานสุดใบสั่ง <b>{{ bn.lab.worst.label }} น. = {{ bn.lab.worst.o2p }}
+                        นาที</b>{% endif %}</div>
+                  </div>
+      </section>
+
+      <!-- 14. เวลาคัดกรอง: มี Lab vs ไม่มี Lab -->
+      <section class="block">
+        <header><span class="no">14</span><span class="t">เวลาคัดกรอง: มี Lab vs ไม่มี Lab</span>
+          {% if bn.screen.ratio %}<span class="tag red">ต่างกัน {{ bn.screen.ratio }} เท่า</span>{% endif %}
+        </header>
+        <div class="body">
+          <div class="cmp">
+            {% for g in bn.screen.groups %}
+            <div class="cmp-it" {{ ('style="border-color:' ~ g.color ~ ';"') | safe }}>
+            <div class="l"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">{{ '
+              science' if loop.first else 'stethoscope' }}</span> {{ g.label }}</div>
+            <div class="v" {{ ('style="color:' ~ g.color ~ ';"') | safe }}>{{ g.avg if g.avg is not none else ' –' }}
+              <small>นาที</small></div>
+            <div class="tr"><span class="fi" {{ ('style="width:' ~ ([g.bar, 3] | max) ~ '%;background:' ~ g.color ~ ';"') | safe }}></span></div>
+            <div class="u">{{ g.n | n }} visit ({{ g.pct }}%)</div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="explain">
+          ผู้ป่วยที่ต้องเจาะ Lab ก่อนพบแพทย์จะ “ค้าง” ที่ขั้นคัดกรองจนกว่าผล Lab จะออก เวลาคัดกรองของกลุ่มนี้จึงสะท้อน <b>Lab TAT</b> โดยตรง — ลดเวลาส่งสิ่งส่งตรวจถึงห้อง Lab จะช่วยลดเวลารอของผู้ป่วยกลุ่มนี้มากที่สุด
+        </div>
+        <div class="note">คัดกรอง = service4 → service11 (ตัดค่าติดลบ/เกิน 6 ชม.) · มี Lab = lab_head สั่งในวันเดียวกันก่อนเวลาเริ่มตรวจ</div>
+      </div>
+    </section>
+
+    <!-- 15. เวลารอรับยา รายชั่วโมง ของเคสจากแผนกนี้ -->
+    <section class="block">
+      <header><span class="no">15</span><span class="t">เวลารอรับยา รายชั่วโมง ของเคสแผนกนี้</span>
+        {% if bn.rx.worst %}<span class="tag red">นานสุด {{ bn.rx.worst.range }} น.</span>{% endif %}
+      </header>
+      <div class="body">
+        {% set H = bn.rx.hours %}
+        {% set L, R, T, B = 30, 474, 14, 226 %}
+        {% set top = nice_max(([bn.rx.target] + H | map(attribute='wait') | select | list) | max) %} {% set bw=(R - L)
+                / (H | length) if (H | length> 0) else 1 %}
+                <svg viewBox="0 0 480 256" width="100%" style="display:block;width:100%;height:auto;overflow:visible;">
+                  <defs>
+                    <linearGradient id="dep-b15-ok-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#34d399" />
+                      <stop offset="50%" stop-color="#10b981" />
+                      <stop offset="100%" stop-color="#059669" />
+                    </linearGradient>
+                    <linearGradient id="dep-b15-mid-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#fde047" />
+                      <stop offset="50%" stop-color="#fb923c" />
+                      <stop offset="100%" stop-color="#ea580c" />
+                    </linearGradient>
+                    <linearGradient id="dep-b15-high-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#f87171" />
+                      <stop offset="50%" stop-color="#ef4444" />
+                      <stop offset="100%" stop-color="#dc2626" />
+                    </linearGradient>
+                    <linearGradient id="dep-b15-na-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#e2e8f0" />
+                      <stop offset="50%" stop-color="#cbd5e1" />
+                      <stop offset="100%" stop-color="#94a3b8" />
+                    </linearGradient>
+                  </defs>
+                  {% for g in range(6) %}
+                  {% set y = B - (B - T) * g / 5 %}
+                  <line x1="{{ L }}" y1="{{ y }}" x2="{{ R }}" y2="{{ y }}" stroke="#e8ecf2"></line>
+                  <text x="{{ L - 5 }}" y="{{ y + 3.5 }}" font-size="10" fill="#6b7280" text-anchor="end">{{ (top * g /
+                    5) | round | int }}</text>
+                  {% endfor %}
+                  {% for h in H %}
+                  {% set x = L + bw * loop.index0 %}
+                  {% if h.wait is not none and top %}
+                  {% set hh = (B - T) * h.wait / top %}
+                  <rect x="{{ x + bw * 0.16 }}" y="{{ B - hh }}" width="{{ bw * 0.68 }}" height="{{ hh }}" rx="3"
+                    fill="url(#dep-b15-{{ h.level }}-grad)" fill-opacity="{{ 1 if h.n >= 30 else 0.4 }}"></rect>
+                  <text x="{{ x + bw / 2 }}" y="{{ B - hh - 4 }}" font-size="10" font-weight="600" fill="#1e293b"
+                    text-anchor="middle">{{ h.wait }}</text>
+                  {% endif %}
+                  <text x="{{ x + bw / 2 }}" y="{{ B + 14 }}" font-size="9.5" fill="#6b7280" text-anchor="middle">{{
+                    h.label }}</text>
+                  <text x="{{ x + bw / 2 }}" y="{{ B + 25 }}" font-size="8" fill="#9aa3b2" text-anchor="middle">{{ h.n |
+                    n }}</text>
+                  {% endfor %}
+                  {% set yt = B - (B - T) * bn.rx.target / top if top else B %}
+                  <line x1="{{ L }}" y1="{{ yt }}" x2="{{ R }}" y2="{{ yt }}" stroke="#059669" stroke-width="1.4"
+                    stroke-dasharray="5 3"></line>
+                  <text x="{{ L + 4 }}" y="{{ yt + 12 }}" font-size="9.5" fill="#059669" stroke="#fff" stroke-width="3"
+                    paint-order="stroke">เป้า ≤ {{ bn.rx.target }} นาที</text>
+                </svg>
+                <div class="note">ตามชั่วโมงที่ใบสั่งยาถึงห้องยา · นาทีเฉลี่ย ใบสั่งยาถึงห้องยา → จ่ายยาเสร็จ (service6
+                  → service16) · เลขเล็กใต้ชั่วโมง = จำนวนใบสั่ง (แท่งจาง &lt; 30 ใบ)
+                  {%- if bn.rx.worst and bn.rx.best %} · <b>{{ bn.rx.worst.label }}:00 น. รอ {{ bn.rx.worst.wait }}
+                    นาที</b> vs {{ bn.rx.best.label }}:00 น. {{ bn.rx.best.wait }} นาที{% endif %}</div>
+            </div>
+      </section>
+
+    </div>
+
+    <!-- ============================== 16. รายการ Visit ผู้ป่วยนอก (Drill down) -->
+    <section class="block" style="margin-top:16px;">
+      <header>
+        <span class="no">16</span><span class="t">รายการ Visit ผู้ป่วยนอก (Drill down) — {{ d.department.name if
+          d.department else dep }}</span>
+        {% if drilldown %}<a class="tag" style="text-decoration:none;"
+          href="{{ url_for('cases_page', d1=d.d1, d2=d.d2, dep=dep) }}">เปิดตารางเต็ม</a>{% endif %}
+      </header>
+      <div class="body" style="padding:18px;">
+        <p style="margin:0 0 14px;font-size:14px;color:#334155;">
+          ตรวจสอบรายเคสผู้ป่วยของแผนก <b>{{ d.department.name if d.department else dep }}</b> ในช่วงวันที่เลือก
+          เพื่อวิเคราะห์เวลารอคอยแบบละเอียดรายบุคคล
+        </p>
+        <div class="dept-action-btns">
+          <a class="dept-case-btn" href="{{ url_for('cases_page', d1=d.d1, d2=d.d2, dep=dep) }}">
+            <span class="material-symbols-outlined" style="font-size:18px;line-height:1;">table_view</span>
+            ดูรายเคสทั้งหมดของแผนกนี้ ({{ d.kpi.total | n }} เคส)
+          </a>
+          <a class="dept-warn-btn" href="{{ url_for('cases_page', d1=d.d1, d2=d.d2, dep=dep, over='1') }}">
+            <span class="material-symbols-outlined" style="font-size:18px;line-height:1;">warning</span>
+            เฉพาะเคสที่เวลารอเกินเป้าหมาย
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================ 17. Recommendations ================================ -->
+    {% set rc = d.recs %}
+    <section class="block recs-block" id="recs" style="margin-top:20px;">
+      <header>
+        <span class="no">17</span><span class="t">แนวทางลดระยะเวลารอคอย — วิเคราะห์เฉพาะแผนกนี้</span>
+        {% if rc['items'] %}<span class="tag">{{ rc['items'] | length }} เรื่องที่ควรปรับ</span>{% endif %}
+      </header>
+      <div class="body">
+        <div class="recs-sum">
+          <span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">schedule</span>
+          เวลารวมเฉลี่ย <b
+            class="{{ 'bad' if rc.summary.total_time and rc.summary.total_time > rc.summary.target_total }}">{{
+            rc.summary.total_time if rc.summary.total_time is not none else '–' }} นาที</b>
+          (เป้าหมาย ≤ {{ rc.summary.target_total }}) ·
+          <span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">verified</span>
+          จบบริการใน 2 ชม. <b class="{{ 'bad' if rc.summary.done < rc.summary.target_done }}">{{ rc.summary.done }}%</b>
+          (เป้าหมาย ≥ {{ rc.summary.target_done }}%)
+          {% if rc['items'] %} · เรียงจากเรื่องที่เกินเป้ามากที่สุด{% endif %}
+        </div>
+        {% if rc['items'] %}
+        <div class="recs">
+          {% for r in rc['items'] %}
+          <div class="rec {{ r.level }}">
+            <div class="rh"><span class="n">{{ loop.index }}</span>
+              <span class="tt">{{ r.title }}</span>
+              <span class="lv">{{ 'เร่งด่วน' if r.level == 'high' else 'ควรปรับ' }}</span>
+            </div>
+            <div class="ev"><span class="material-symbols-outlined"
+                style="font-size:1.15em;vertical-align:-2px">analytics</span> {{ r.evidence }}</div>
+            <ul>{% for a in r.actions %}<li>{{ a }}</li>{% endfor %}</ul>
+            <div class="tk"><span class="material-symbols-outlined"
+                style="font-size:1.15em;vertical-align:-2px">flag</span> ติดตาม: {{ r.track }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty"><span class="material-symbols-outlined"
+            style="font-size:1.25em;vertical-align:-2px;color:var(--green)">task_alt</span>
+          ตัวชี้วัดเวลารอทุกตัวของแผนกนี้อยู่ในเป้าหมาย — รักษามาตรฐานและติดตามต่อเนื่อง</div>
+        {% endif %}
+        <div class="note">สร้างอัตโนมัติจากตัวชี้วัดของช่วงวันที่เลือก (แต่ละข้อขึ้นเมื่อเกินเกณฑ์เท่านั้น) ·
+          ใช้ประกอบการประชุมทีม PCT/คุณภาพ
+          · ติดตามผลด้วยการเลือกช่วงวันที่ก่อน–หลังปรับปรุง</div>
+      </div>
+    </section>
+
+    <!-- ============================================================ footer -->
+    <div class="foot">
+      <div><b>แหล่งข้อมูล</b> — HOSxP: ovst / service_time / oapp / lab_head / patient / pttype / ovstdiag /
+        kskdepartment · MariaDB (intranet เท่านั้น) · หน้าแผนกวิเคราะห์เฉพาะ {{ d.department.name if d.department else
+        dep }}</div>
+      <div class="tag">“ข้อมูลดี โรงพยาบาลดีขึ้น<br>ผู้ป่วยได้รับการดูแลที่ดีขึ้น”</div>
+    </div>
+    {% if not print_mode %}{% include "_footer.html" %}{% endif %}
+
+  </div>
+
+  <script>
+    (function () {
+      var sw = document.getElementById('dept-switcher');
+      if (sw) {
+        sw.addEventListener('change', function () {
+          location.href = "{{ url_for('department_page') }}?d1={{ d.d1 }}&d2={{ d.d2 }}&dep=" + encodeURIComponent(this.value);
+        });
+      }
+    })();
+  </script>
+  <script src="{{ url_for('static', filename='live_dashboard.js') }}"></script>
+</body>
+
+</html>

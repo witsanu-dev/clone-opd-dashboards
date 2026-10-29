@@ -1,100 +1,131 @@
 <!doctype html>
 <html lang="th">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>ผังผู้ป่วย OPD — {{ hospital }}</title>
-{% include "_icons.html" %}
-<link rel="stylesheet" href="{{ url_for('static', filename='flow.css') }}">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ผังผู้ป่วย OPD — {{ hospital }}</title>
+  {% include "_icons.html" %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='flow.css') }}">
 </head>
+
 <body>
-<canvas id="map"></canvas>
-<div id="tip" class="tip" hidden></div>
+  <canvas id="map"></canvas>
+  <div id="tip" class="tip" hidden></div>
 
-<header class="bar">
-  <a class="brand" href="{{ url_for('dashboard') }}" title="กลับหน้าแดชบอร์ด">
-    <img src="{{ logo_url }}" alt="">
-    <span><b>ผังผู้ป่วย OPD</b><small>{{ hospital }}</small></span>
-  </a>
-  <a class="manual-link" href="{{ url_for('help_page') }}#flow" title="คู่มือ · เวอร์ชัน {{ version }}">ℹ คู่มือ</a>
-  <div class="clock">
-    <span class="dot" id="modeDot"></span>
-    <b id="clock">--:--</b><small>น.</small>
-    <span class="mode" id="mode">LIVE</span>
-    <span class="date" id="dateLabel"></span>
+  <header class="bar">
+    <a class="brand" href="{{ url_for('dashboard') }}" title="กลับหน้าแดชบอร์ด">
+      <img src="{{ logo_url }}" alt="">
+      <span><b>ผังผู้ป่วย OPD</b><small>{{ hospital }}</small></span>
+    </a>
+    <a class="manual-link" href="{{ url_for('help_page') }}#flow" title="คู่มือ · เวอร์ชัน {{ version }}"><span
+        class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">help</span> คู่มือ</a>
+    <div class="clock">
+      <span class="dot" id="modeDot"></span>
+      <b id="clock">--:--</b><small>น.</small>
+      <span class="mode" id="mode">LIVE</span>
+      <span class="date" id="dateLabel"></span>
+    </div>
+    <div class="stats">
+      <div><small>มาแล้ว</small><b id="stArrived">0</b></div>
+      <div><small>อยู่ใน รพ.</small><b id="stIn">0</b></div>
+      <div><small>กลับแล้ว</small><b id="stLeft">0</b></div>
+      <div class="dens" title="คนในทุกโซน (ไม่รวม ER) ÷ ที่นั่งรวม · < 45% ว่าง · 45–79% ปานกลาง · ≥ 80% แน่น">
+        <small>ความหนาแน่น</small><b id="stDens">–</b>
+      </div>
+      <div class="worst"><small>รอนานสุดขณะนี้</small><b id="stWorst">–</b></div>
+    </div>
+  </header>
+
+  <section class="ctrl card">
+    <div class="row">
+      <input type="date" id="date" value="{{ d }}" max="{{ today }}">
+      <button id="btnLive" class="live" title="ดูสถานการณ์ปัจจุบัน">● LIVE</button>
+      <button id="btnPlay" title="เล่น / หยุด"><span class="material-symbols-outlined"
+          style="font-size:16px;vertical-align:-2px">play_arrow</span></button>
+      <span class="speeds" id="speeds">
+        <button data-s="1">×1</button><button data-s="10">×10</button><button data-s="30">×30</button>
+        <button data-s="60">×60</button><button data-s="120">×120</button><button data-s="300">×300</button>
+      </span>
+    </div>
+    <div class="tl">
+      <canvas id="timeline"></canvas>
+    </div>
+    <div class="note" id="note">กำลังโหลดข้อมูล…</div>
+  </section>
+
+  <aside class="panel card" id="panel">
+    <h3>จุดบริการ <small>คน/ที่นั่ง · รอ (ค่ากลาง)</small></h3>
+    <div id="rows"></div>
+    <div class="dlegend"><span><i style="background:#1fa463"></i>ว่าง &lt;45%</span>
+      <span><i style="background:#f59e0b"></i>ปานกลาง</span><span><i style="background:#e5484d"></i>แน่น ≥80%</span>
+    </div>
+    <div class="remote" id="remote"></div>
+    <button class="fold" id="fold" aria-label="ย่อ/ขยาย"><span class="material-symbols-outlined"
+        style="font-size:14px">expand_more</span></button>
+  </aside>
+
+  <div class="zoom">
+    <button id="zIn" title="ซูมเข้า"><span class="material-symbols-outlined" style="font-size:16px">add</span></button>
+    <button id="zOut" title="ซูมออก"><span class="material-symbols-outlined"
+        style="font-size:16px">remove</span></button>
+    <button id="zFit" title="พอดีจอ"><span class="material-symbols-outlined"
+        style="font-size:16px">fit_screen</span></button>
+    <button id="zFull" title="เต็มจอ"><span class="material-symbols-outlined"
+        style="font-size:16px">fullscreen</span></button>
   </div>
-  <div class="stats">
-    <div><small>มาแล้ว</small><b id="stArrived">0</b></div>
-    <div><small>อยู่ใน รพ.</small><b id="stIn">0</b></div>
-    <div><small>กลับแล้ว</small><b id="stLeft">0</b></div>
-    <div class="dens" title="คนในทุกโซน (ไม่รวม ER) ÷ ที่นั่งรวม · < 45% ว่าง · 45–79% ปานกลาง · ≥ 80% แน่น">
-      <small>ความหนาแน่น</small><b id="stDens">–</b></div>
-    <div class="worst"><small>รอนานสุดขณะนี้</small><b id="stWorst">–</b></div>
-  </div>
-</header>
 
-<section class="ctrl card">
-  <div class="row">
-    <input type="date" id="date" value="{{ d }}" max="{{ today }}">
-    <button id="btnLive" class="live" title="ดูสถานการณ์ปัจจุบัน">● สด</button>
-    <button id="btnPlay" title="เล่น / หยุด">▶</button>
-    <span class="speeds" id="speeds">
-      <button data-s="1">×1</button><button data-s="10">×10</button><button data-s="30">×30</button>
-      <button data-s="60">×60</button><button data-s="120">×120</button><button data-s="300">×300</button>
-    </span>
-  </div>
-  <div class="tl">
-    <canvas id="timeline"></canvas>
-  </div>
-  <div class="note" id="note">กำลังโหลดข้อมูล…</div>
-</section>
+  <footer class="legend card">
+    <span class="grp">เสื้อ</span>
+    <span><i style="background:#dc2626"></i>วิกฤต</span>
+    <span><i style="background:#f97316"></i>ฉุกเฉิน</span>
+    <span><i style="background:#facc15"></i>เร่งด่วน</span>
+    <span><i style="background:#22c55e"></i>กึ่งเร่งด่วน</span>
+    <span><i style="background:#fff;box-shadow:inset 0 0 0 1px #94a3b8"></i>ทั่วไป</span>
+    <span><i style="background:#8b5cf6"></i>สูงอายุ/พระ/ผู้พิการ</span>
+    <span class="grp">กางเกง</span>
+    <span><i style="background:#3b82f6"></i>ชาย</span>
+    <span><i style="background:#f472b6"></i>หญิง</span>
+    <span class="grp">รอ</span>
+    <span><span class="material-symbols-outlined"
+        style="color:#f59e0b;font-size:1.2em;vertical-align:-2px">sentiment_dissatisfied</span> เกินเป้า</span>
+    <span><span class="material-symbols-outlined"
+        style="color:#dc2626;font-size:1.2em;vertical-align:-2px">sentiment_very_dissatisfied</span> เกิน ≥ 1.5
+      เท่า</span>
+    <span><span class="material-symbols-outlined"
+        style="color:#ef4444;font-size:1.2em;vertical-align:-2px">favorite</span> ได้รับบริการทันเวลา</span>
+    <span class="muted">ตำแหน่งอนุมานจากเวลาที่บันทึกใน HOSxP · ผังตามแผนผังอาคาร (ย่อส่วน)</span>
+    {% if layout_err %}<span class="muted" style="color:#b4232f"><span class="material-symbols-outlined"
+        style="font-size:1.15em;vertical-align:-2px">warning</span> {{ layout_err }}</span>{% endif %}
+  </footer>
 
-<aside class="panel card" id="panel">
-  <h3>จุดบริการ <small>คน/ที่นั่ง · รอ (ค่ากลาง)</small></h3>
-  <div id="rows"></div>
-  <div class="dlegend"><span><i style="background:#1fa463"></i>ว่าง &lt;45%</span>
-    <span><i style="background:#f59e0b"></i>ปานกลาง</span><span><i style="background:#e5484d"></i>แน่น ≥80%</span></div>
-  <div class="remote" id="remote"></div>
-  <button class="fold" id="fold" aria-label="ย่อ/ขยาย">▾</button>
-</aside>
-
-<div class="zoom">
-  <button id="zIn" title="ซูมเข้า">+</button>
-  <button id="zOut" title="ซูมออก">−</button>
-  <button id="zFit" title="พอดีจอ">⤢</button>
-  <button id="zFull" title="เต็มจอ">⛶</button>
-</div>
-
-<footer class="legend card">
-  <span class="grp">เสื้อ</span>
-  <span><i style="background:#dc2626"></i>วิกฤต</span>
-  <span><i style="background:#f97316"></i>ฉุกเฉิน</span>
-  <span><i style="background:#facc15"></i>เร่งด่วน</span>
-  <span><i style="background:#22c55e"></i>กึ่งเร่งด่วน</span>
-  <span><i style="background:#fff;box-shadow:inset 0 0 0 1px #94a3b8"></i>ทั่วไป</span>
-  <span><i style="background:#8b5cf6"></i>สูงอายุ/พระ/ผู้พิการ</span>
-  <span class="grp">กางเกง</span>
-  <span><i style="background:#3b82f6"></i>ชาย</span>
-  <span><i style="background:#f472b6"></i>หญิง</span>
-  <span class="grp">รอ</span>
-  <span>😤 เกินเป้า</span>
-  <span>😡 เกิน ≥ 1.5 เท่า</span>
-  <span>❤️ ได้รับบริการทันเวลา</span>
-  <span class="muted">ตำแหน่งอนุมานจากเวลาที่บันทึกใน HOSxP · ผังตามแผนผังอาคาร (ย่อส่วน)</span>
-  {% if layout_err %}<span class="muted" style="color:#b4232f">⚠ {{ layout_err }}</span>{% endif %}
-</footer>
-
-<script>
-window.FLOW = {
-  api: "{{ url_for('api_flow') }}",
-  date: "{{ d }}",
-  today: "{{ today }}",
-  t: {{ (request.args.get('t') or '') | tojson }},
-  tv: {{ 'true' if request.args.get('tv') == '1' else 'false' }},
-  layout: {{ layout | tojson }}
-};
-{% if layout_err %}console.warn({{ layout_err | tojson }});{% endif %}
-</script>
-<script src="{{ url_for('static', filename='flow.js') }}"></script>
+  <div id="flow-config"
+       data-api="{{ url_for('api_flow') }}"
+       data-date="{{ d }}"
+       data-today="{{ today }}"
+       data-t="{{ request.args.get('t', '') }}"
+       data-tv="{{ '1' if request.args.get('tv') == '1' else '0' }}"
+       data-err="{{ layout_err or '' }}"
+       hidden></div>
+  <script id="flow-layout" type="application/json">{{ layout | tojson | safe }}</script>
+  <script>
+    (function () {
+      var cfg = document.getElementById('flow-config').dataset;
+      var layoutEl = document.getElementById('flow-layout');
+      window.FLOW = {
+        api: cfg.api,
+        date: cfg.date,
+        today: cfg.today,
+        t: cfg.t,
+        tv: cfg.tv === '1',
+        layout: layoutEl ? JSON.parse(layoutEl.textContent || '{}') : {}
+      };
+      if (cfg.err) {
+        console.warn(cfg.err);
+      }
+    })();
+  </script>
+  <script src="{{ url_for('static', filename='flow.js') }}"></script>
 </body>
+
 </html>

@@ -11,12 +11,12 @@
 <div class="sheet">
 
   <div class="page-h">
-    <a class="back" href="{{ url_for('dashboard', d1=d1, d2=d2) }}">‹ กลับแดชบอร์ด</a>
+    <a class="back" href="{{ url_for('dashboard', d1=d1, d2=d2) }}"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">arrow_back</span> กลับแดชบอร์ด</a>
     <div>
       <div class="ttl">ดูรายเคส (Drill down)</div>
       <div class="sub">{{ hospital }} · {{ period }}</div>
     </div>
-    <a class="help-link" href="{{ url_for('help_page') }}#cases">ℹ คู่มือ</a>
+    <a class="help-link" href="{{ url_for('help_page') }}#cases"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">help</span> คู่มือ</a>
   </div>
 
   <form class="filters" method="get" action="{{ url_for('cases_page') }}">
@@ -37,13 +37,13 @@
         {% endfor %}
       </select></label>
     <label class="chk"><input type="checkbox" name="over" value="1" {{ 'checked' if over }}> เฉพาะที่เกินเป้า</label>
-    <button type="submit">⟳ แสดง</button>
+    <button type="submit"><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">refresh</span> แสดง</button>
   </form>
-  {% if warn %}<div class="warn">⚠ {{ warn }}</div>{% endif %}
+  {% if warn %}<div class="warn"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">warning</span> {{ warn }}</div>{% endif %}
 
   <section class="block">
     <header><span class="t">รายการ visit</span>
-      <input class="search" type="search" placeholder="🔍 ค้นหา (แผนก สิทธิ เวลา…)"
+      <input class="search" type="search" placeholder="ค้นหา (แผนก สิทธิ เวลา…)"
              data-search="#cases" data-count="#count" aria-label="ค้นหาในตาราง">
       <span class="count" id="count"></span>
     </header>
@@ -79,7 +79,7 @@
       <div class="note">หน่วย: นาที · ตัวแดง = เกินเป้าหมาย · “–” = ไม่มีบันทึกเวลาขั้นนั้น หรือค่าผิดปกติ (ติดลบ/เกิน 6 ชม.) ·
         คลิกหัวคอลัมน์เพื่อเรียงลำดับ
         {% if c.truncated %}<br><b>แสดง {{ c.limit | n }} รายการแรก</b> — เลือกแผนกหรือช่วงวันที่ให้แคบลงเพื่อดูครบ{% endif %}
-        {% if not show_hn %}<br>🔒 ไม่แสดง HN เมื่อเปิดผ่านอินเทอร์เน็ต — เปิดจากเครื่องในโรงพยาบาลโดยตรงเพื่อดู HN{% endif %}</div>
+        {% if not show_hn %}<br><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">lock</span> ไม่แสดง HN เมื่อเปิดผ่านอินเทอร์เน็ต — เปิดจากเครื่องในโรงพยาบาลโดยตรงเพื่อดู HN{% endif %}</div>
     </div>
   </section>
 

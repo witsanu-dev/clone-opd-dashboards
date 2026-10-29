@@ -1,0 +1,701 @@
+{
+  "generated_at": "29 ต.ค. 2569 เวลา 08:30 น.",
+  "period_label": "วันนี้",
+  "d1": "2026-10-29",
+  "d2": "2026-10-29",
+  "days": 1,
+  "dep": "005",
+  "department": {
+    "dep": "005",
+    "name": "แผนกตรวจโรคทั่วไป",
+    "group": "GEN",
+    "group_name": "ตรวจโรคทั่วไป"
+  },
+  "department_doctors": [
+    {
+      "code": "01",
+      "name": "นพ.สมชาย เก่งการแพทย์",
+      "count": 42,
+      "wait_dr": 18,
+      "exam_m": 7,
+      "bar": 100
+    },
+    {
+      "code": "02",
+      "name": "พญ.สมหญิง จริงใจรักษา",
+      "count": 38,
+      "wait_dr": 15,
+      "exam_m": 6,
+      "bar": 90
+    },
+    {
+      "code": "03",
+      "name": "นพ.ปรีชา ปัญญาดี",
+      "count": 25,
+      "wait_dr": 22,
+      "exam_m": 8,
+      "bar": 60
+    },
+    {
+      "code": "04",
+      "name": "พญ.นภา วรรณศิลป์",
+      "count": 18,
+      "wait_dr": 14,
+      "exam_m": 5,
+      "bar": 43
+    },
+    {
+      "code": "05",
+      "name": "นพ.เกรียงไกร ชัยมงคล",
+      "count": 12,
+      "wait_dr": 19,
+      "exam_m": 9,
+      "bar": 29
+    }
+  ],
+  "kpi": {
+    "total": 135,
+    "per_day": 135,
+    "new": 28,
+    "old": 107,
+    "total_delta": null,
+    "total_time": 52,
+    "wait_dr": 17,
+    "done_120_pct": 88.5
+  },
+  "sla": [
+    {
+      "label": "ลงทะเบียน",
+      "avg": 6,
+      "target": 10,
+      "ok": true,
+      "n": 135
+    },
+    {
+      "label": "รอคัดกรอง",
+      "avg": 8,
+      "target": 15,
+      "ok": true,
+      "n": 135
+    },
+    {
+      "label": "คัดกรอง / ซักประวัติ",
+      "avg": 9,
+      "target": 15,
+      "ok": true,
+      "n": 135
+    },
+    {
+      "label": "รอพบแพทย์",
+      "avg": 17,
+      "target": 20,
+      "ok": true,
+      "n": 135
+    },
+    {
+      "label": "ตรวจ / หัตถการ",
+      "avg": 7,
+      "target": 15,
+      "ok": true,
+      "n": 135
+    },
+    {
+      "label": "ชำระเงิน",
+      "avg": 4,
+      "target": 10,
+      "ok": true,
+      "n": 120
+    },
+    {
+      "label": "รอรับยา",
+      "avg": 12,
+      "target": 20,
+      "ok": true,
+      "n": 130
+    }
+  ],
+  "hourly": {
+    "hours": [
+      {
+        "label": "06:00",
+        "total": 12,
+        "walkin": 10,
+        "appt": 2
+      },
+      {
+        "label": "07:00",
+        "total": 28,
+        "walkin": 20,
+        "appt": 8
+      },
+      {
+        "label": "08:00",
+        "total": 45,
+        "walkin": 25,
+        "appt": 20
+      },
+      {
+        "label": "09:00",
+        "total": 24,
+        "walkin": 16,
+        "appt": 8
+      },
+      {
+        "label": "10:00",
+        "total": 14,
+        "walkin": 10,
+        "appt": 4
+      },
+      {
+        "label": "11:00",
+        "total": 6,
+        "walkin": 5,
+        "appt": 1
+      },
+      {
+        "label": "12:00",
+        "total": 2,
+        "walkin": 2,
+        "appt": 0
+      },
+      {
+        "label": "13:00",
+        "total": 3,
+        "walkin": 3,
+        "appt": 0
+      },
+      {
+        "label": "14:00",
+        "total": 1,
+        "walkin": 1,
+        "appt": 0
+      }
+    ],
+    "peak": {
+      "range": "08-09",
+      "total": 45,
+      "walkin": 25,
+      "appt": 20
+    },
+    "off_hours": 0,
+    "peak_per_day": 45
+  },
+  "depts": [
+    {
+      "dep": "005",
+      "name": "แผนกตรวจโรคทั่วไป",
+      "count": 135,
+      "bar": 100
+    },
+    {
+      "dep": "071",
+      "name": "Telemedicine (คลินิกคอกพอก)",
+      "count": 9,
+      "bar": 7
+    },
+    {
+      "dep": "022",
+      "name": "ห้องฉุกเฉิน",
+      "count": 4,
+      "bar": 3
+    },
+    {
+      "dep": "004",
+      "name": "ฝ่ายทันตสาธารณสุข",
+      "count": 2,
+      "bar": 2
+    }
+  ],
+  "dept_mis": {
+    "count": 0,
+    "bar": 0,
+    "seen": 0,
+    "rows": []
+  },
+  "clinics": [],
+  "flow": {
+    "steps": [
+      {
+        "label": "ลงทะเบียน",
+        "value": 135,
+        "pct": 100,
+        "color": "#1d4ed8",
+        "icon": "how_to_reg"
+      },
+      {
+        "label": "คัดกรอง",
+        "value": 135,
+        "pct": 100,
+        "color": "#0284c7",
+        "icon": "vital_signs"
+      },
+      {
+        "label": "ส่งพบแพทย์",
+        "value": 135,
+        "pct": 100,
+        "color": "#0369a1",
+        "icon": "forward_to_inbox"
+      },
+      {
+        "label": "พบแพทย์",
+        "value": 135,
+        "pct": 100,
+        "color": "#2563eb",
+        "icon": "medical_services"
+      },
+      {
+        "label": "ห้องยา",
+        "value": 130,
+        "pct": 96.3,
+        "color": "#7c3aed",
+        "icon": "medication"
+      },
+      {
+        "label": "ชำระเงิน",
+        "value": 120,
+        "pct": 88.9,
+        "color": "#059669",
+        "icon": "payments"
+      },
+      {
+        "label": "กลับบ้าน",
+        "value": 132,
+        "pct": 97.8,
+        "color": "#0d9488",
+        "icon": "home"
+      }
+    ],
+    "admitted": 3,
+    "refer": 0
+  },
+  "appt": {
+    "appt_visits": 43,
+    "walkin": 92,
+    "booked": 48,
+    "came": 43,
+    "show_rate": 89.6,
+    "noshow_rate": 10.4,
+    "items": [
+      {
+        "label": "มาตามนัด",
+        "value": 43,
+        "pct": 89.6,
+        "color": "#1d4ed8"
+      },
+      {
+        "label": "ผิดนัด (No-show)",
+        "value": 5,
+        "pct": 10.4,
+        "color": "#dc2626"
+      }
+    ]
+  },
+  "profile": {
+    "rights": [
+      {
+        "label": "UCS - บัตรทอง",
+        "value": 95,
+        "pct": 70.4,
+        "color": "#1d4ed8"
+      },
+      {
+        "label": "OFC - ข้าราชการ/เบิกตรง",
+        "value": 28,
+        "pct": 20.7,
+        "color": "#059669"
+      },
+      {
+        "label": "SSS - ประกันสังคม",
+        "value": 8,
+        "pct": 5.9,
+        "color": "#ea580c"
+      },
+      {
+        "label": "LGO - อปท.",
+        "value": 4,
+        "pct": 3.0,
+        "color": "#7c3aed"
+      }
+    ],
+    "dx": [
+      {
+        "code": "I10",
+        "label": "Essential (primary) hypertension",
+        "value": 42,
+        "bar": 100
+      },
+      {
+        "code": "E11.9",
+        "label": "Type 2 diabetes mellitus without complications",
+        "value": 31,
+        "bar": 74
+      },
+      {
+        "code": "J00",
+        "label": "Acute nasopharyngitis [common cold]",
+        "value": 18,
+        "bar": 43
+      },
+      {
+        "code": "M54.5",
+        "label": "Low back pain",
+        "value": 14,
+        "bar": 33
+      },
+      {
+        "code": "K21.9",
+        "label": "Gastro-esophageal reflux disease without esophagitis",
+        "value": 11,
+        "bar": 26
+      }
+    ]
+  },
+  "alerts": [
+    {
+      "issue": "เวลารวมต่อราย",
+      "target": "≤ 60 นาที",
+      "value": "52 นาที",
+      "level": "ok"
+    },
+    {
+      "issue": "เวลารอพบแพทย์",
+      "target": "≤ 20 นาที",
+      "value": "17 นาที",
+      "level": "ok"
+    },
+    {
+      "issue": "จบบริการใน 2 ชม.",
+      "target": "≥ 80%",
+      "value": "88.5%",
+      "level": "ok"
+    },
+    {
+      "issue": "อัตราผิดนัด (No-show)",
+      "target": "≤ 10%",
+      "value": "10.4%",
+      "level": "mid"
+    }
+  ],
+  "bn": {
+    "dr": {
+      "hours": [
+        {
+          "range": "06-07",
+          "arrive": 12,
+          "exam": 0,
+          "wait": null,
+          "label": "06"
+        },
+        {
+          "range": "07-08",
+          "arrive": 28,
+          "exam": 8,
+          "wait": 26,
+          "label": "07"
+        },
+        {
+          "range": "08-09",
+          "arrive": 45,
+          "exam": 32,
+          "wait": 22,
+          "label": "08"
+        },
+        {
+          "range": "09-10",
+          "arrive": 24,
+          "exam": 36,
+          "wait": 18,
+          "label": "09"
+        },
+        {
+          "range": "10-11",
+          "arrive": 14,
+          "exam": 28,
+          "wait": 14,
+          "label": "10"
+        },
+        {
+          "range": "11-12",
+          "arrive": 6,
+          "exam": 18,
+          "wait": 10,
+          "label": "11"
+        },
+        {
+          "range": "12-13",
+          "arrive": 2,
+          "exam": 5,
+          "wait": 8,
+          "label": "12"
+        },
+        {
+          "range": "13-14",
+          "arrive": 3,
+          "exam": 6,
+          "wait": 9,
+          "label": "13"
+        },
+        {
+          "range": "14-15",
+          "arrive": 1,
+          "exam": 2,
+          "wait": 6,
+          "label": "14"
+        },
+        {
+          "range": "15-16",
+          "arrive": 0,
+          "exam": 0,
+          "wait": null,
+          "label": "15"
+        },
+        {
+          "range": "16-17",
+          "arrive": 0,
+          "exam": 0,
+          "wait": null,
+          "label": "16"
+        }
+      ],
+      "first_avg": "07:45",
+      "first_median": "07:40",
+      "first_days": 1,
+      "early_pct": 63.0,
+      "early": 85,
+      "peak_exam": {
+        "range": "09-10",
+        "exam": 36
+      },
+      "worst_wait": {
+        "range": "07-08",
+        "wait": 26
+      }
+    },
+    "appt": {
+      "total": 48,
+      "slots": [
+        {
+          "label": "08:00 น.",
+          "value": 28,
+          "pct": 58.3,
+          "bar": 100,
+          "muted": false
+        },
+        {
+          "label": "08:30 น.",
+          "value": 12,
+          "pct": 25.0,
+          "bar": 43,
+          "muted": false
+        },
+        {
+          "label": "09:00 น.",
+          "value": 5,
+          "pct": 10.4,
+          "bar": 18,
+          "muted": false
+        },
+        {
+          "label": "เวลาอื่น ๆ",
+          "value": 3,
+          "pct": 6.3,
+          "bar": 11,
+          "muted": true
+        }
+      ],
+      "main": {
+        "label": "08:00 น.",
+        "value": 28,
+        "pct": 58.3
+      }
+    },
+    "lab": {
+      "target": 60,
+      "avg": 38,
+      "worst": {
+        "label": "08:00",
+        "o2p": 46
+      },
+      "hours": [
+        {
+          "label": "07:00",
+          "n": 8,
+          "o2r": 12,
+          "r2p": 24,
+          "o2p": 36,
+          "level": "ok"
+        },
+        {
+          "label": "08:00",
+          "n": 24,
+          "o2r": 16,
+          "r2p": 30,
+          "o2p": 46,
+          "level": "ok"
+        },
+        {
+          "label": "09:00",
+          "n": 14,
+          "o2r": 14,
+          "r2p": 22,
+          "o2p": 36,
+          "level": "ok"
+        },
+        {
+          "label": "10:00",
+          "n": 6,
+          "o2r": 10,
+          "r2p": 20,
+          "o2p": 30,
+          "level": "ok"
+        }
+      ]
+    },
+    "screen": {
+      "groups": [
+        {
+          "label": "มี Lab ก่อนพบแพทย์",
+          "color": "#dc2626",
+          "avg": 46,
+          "bar": 85,
+          "n": 42,
+          "pct": 31.1
+        },
+        {
+          "label": "ไม่มี Lab",
+          "color": "#059669",
+          "avg": 11,
+          "bar": 20,
+          "n": 93,
+          "pct": 68.9
+        }
+      ],
+      "ratio": 4.2
+    },
+    "rx": {
+      "target": 20,
+      "worst": {
+        "range": "10-11",
+        "wait": 16
+      },
+      "best": {
+        "range": "07-08",
+        "wait": 7
+      },
+      "hours": [
+        {
+          "label": "07",
+          "wait": 7,
+          "level": "ok",
+          "n": 8
+        },
+        {
+          "label": "08",
+          "wait": 11,
+          "level": "ok",
+          "n": 26
+        },
+        {
+          "label": "09",
+          "wait": 15,
+          "level": "ok",
+          "n": 38
+        },
+        {
+          "label": "10",
+          "wait": 16,
+          "level": "ok",
+          "n": 32
+        },
+        {
+          "label": "11",
+          "wait": 12,
+          "level": "ok",
+          "n": 18
+        },
+        {
+          "label": "12",
+          "wait": 8,
+          "level": "ok",
+          "n": 6
+        },
+        {
+          "label": "13",
+          "wait": 9,
+          "level": "ok",
+          "n": 2
+        }
+      ]
+    }
+  },
+  "dept_table": [
+    {
+      "dep": "005",
+      "name": "แผนกตรวจโรคทั่วไป",
+      "n": 135,
+      "new": 28,
+      "wait_dr": 17,
+      "total_time": 52,
+      "done_120": 88.5
+    },
+    {
+      "dep": "071",
+      "name": "Telemedicine (คลินิกคอกพอก)",
+      "n": 9,
+      "new": 0,
+      "wait_dr": null,
+      "total_time": 247,
+      "done_120": 0.0
+    },
+    {
+      "dep": "022",
+      "name": "ห้องฉุกเฉิน",
+      "n": 4,
+      "new": 0,
+      "wait_dr": 6,
+      "total_time": 17,
+      "done_120": 100.0
+    },
+    {
+      "dep": "004",
+      "name": "ฝ่ายทันตสาธารณสุข",
+      "n": 2,
+      "new": 0,
+      "wait_dr": null,
+      "total_time": null,
+      "done_120": null
+    }
+  ],
+  "specialties": [],
+  "specialties_top": [],
+  "time_n": 135,
+  "targets": {
+    "total": 60,
+    "wait_dr": 20,
+    "done": 80,
+    "noshow": 10
+  },
+  "recs": {
+    "summary": {
+      "total_time": 52,
+      "target_total": 60,
+      "done": 88.5,
+      "target_done": 80
+    },
+    "items": [
+      {
+        "key": "slot",
+        "title": "กระจายเวลานัดหมายเป็นช่วง (Slot)",
+        "level": "mid",
+        "ratio": 1.45,
+        "evidence": "นัดเวลา 08:00 น. 58.3% ของนัดทั้งหมด · ผู้ป่วยมาถึงก่อน 09:00 น. 63.0%",
+        "actions": [
+          "นัดเป็นช่วงละ 30–60 นาที และจำกัดจำนวนต่อช่วงตามจำนวนแพทย์",
+          "ผู้ป่วยโรคเรื้อรังที่อาการคงที่ นัดช่วงบ่าย หรือรับยาต่อที่ รพ.สต.",
+          "พิมพ์เวลานัดในใบนัดชัดเจน และแจ้งว่าไม่ต้องมาก่อนเวลา"
+        ],
+        "track": "สัดส่วนนัดช่วงเวลาเดียว ≤ 40% (บล็อก 12)"
+      }
+    ]
+  }
+}

@@ -265,6 +265,92 @@ def _code_audit(d1, d2, visits):
                 "status": "ok" if er else "bad",
                 "fix": None if er else "ตั้ง OPD_DEP_MAP=<รหัส>=ER หรือ OPD_ER_DEP=<รหัส>",
                 "impact": "ผู้ป่วย ER ถูกนับรวมเวลารอ OPD"})
+
+    # 5. การส่งต่อผู้ป่วยภายนอก (Refer Out)
+    def refer():
+        r = fetch_one("""
+            select count(distinct o.vn) total_v,
+                   sum(case when o.ovstost = '54' then 1 else 0 end) ovstost_54,
+                   sum(case when ro.vn is not null then 1 else 0 end) in_referout,
+                   sum(case when o.ovstost = '54' and ro.vn is not null then 1 else 0 end) matched_refer
+            from ovst o left join referout ro on ro.vn = o.vn
+            where o.vstdate between %(d1)s and %(d2)s""", p) or {}
+        ro_cnt = num(r.get("in_referout"))
+        st_54 = num(r.get("ovstost_54"))
+        matched = num(r.get("matched_refer"))
+        if not ro_cnt and not st_54:
+            return {"label": "การส่งต่อผู้ป่วย (Refer Out)", "assume": "ovstost = '54' ตรงกับ referout",
+                    "found": "ไม่มีเคส Refer Out ในช่วงนี้", "status": "ok", "fix": None,
+                    "impact": "สถิติการส่งต่อผู้ป่วยภายนอก"}
+        diff = abs(ro_cnt - st_54)
+        st = "ok" if diff == 0 else "warn"
+        fix = "ลงบันทึกทั้งใบส่งต่อ referout และตั้ง ovstost=54 ให้ตรงกัน เพื่อความแม่นยำในการนับยอด" if diff > 0 else None
+        return {"label": "การส่งต่อผู้ป่วย (Refer Out)", "assume": "ovstost = '54' ตรงกับ referout",
+                "found": f"ตาราง referout มี {ro_cnt:,} ราย · ovst.ovstost=54 มี {st_54:,} ราย (ตรงกัน {matched:,} ราย)",
+                "status": st, "fix": fix,
+                "impact": "สถิติการส่งต่อผู้ป่วยภายนอก"}
+    out.append(_safe(refer))
+
+    # 6. คุณภาพข้อมูล Lab (TAT)
+    def lab_tat():
+        r = fetch_one("""
+            select count(l.lab_order_number) orders,
+                   sum(l.receive_date is not null) received,
+                   sum(l.report_date is not null) reported
+            from lab_head l
+            where l.order_date between %(d1)s and %(d2)s""", p) or {}
+        orders = num(r.get("orders"))
+        if not orders:
+            return {"label": "คุณภาพข้อมูล Lab (TAT)", "assume": "มีเวลาลงรับและรายงานผล",
+                    "found": "ไม่มีการสั่งแล็บในช่วงนี้", "status": "ok", "fix": None,
+                    "impact": "บล็อก 14 ระยะเวลารอผลแล็บ"}
+        rec_pct = queries._pct(num(r.get("received")), orders)
+        rep_pct = queries._pct(num(r.get("reported")), orders)
+        st = "ok" if rec_pct >= 90 and rep_pct >= 85 else "warn" if rec_pct >= 70 else "bad"
+        return {"label": "คุณภาพข้อมูล Lab (TAT)", "assume": "ลงรับ ≥90% · รายงานผล ≥85%",
+                "found": f"สั่ง {orders:,} ใบ · ลงรับ {rec_pct}% · รายงานผลเสร็จ {rep_pct}%",
+                "status": st, "fix": None if st == "ok" else "กำชับห้องแล็บลงเวลารับสิ่งส่งตรวจและรายงานผลในระบบ",
+                "impact": "บล็อก 14 และเวลารอคอยของผู้ป่วยที่ตรวจแล็บ"}
+    out.append(_safe(lab_tat))
+
+    # 7. การบันทึกเวลาจ่ายยา (Pharmacy)
+    def rx_workflow():
+        r = fetch_one("""
+            select sum(case when s.service6 is not null then 1 else 0 end) rx_ordered,
+                   sum(case when s.service19 is not null then 1 else 0 end) rx_dispensed
+            from ovst o left join service_time s on s.vn = o.vn
+            where o.vstdate between %(d1)s and %(d2)s""", p) or {}
+        rx_ord = num(r.get("rx_ordered"))
+        rx_disp = num(r.get("rx_dispensed"))
+        if not rx_ord:
+            return {"label": "การบันทึกเวลาจ่ายยา (Pharmacy)", "assume": "มีเวลาจ่ายยา service19",
+                    "found": "ไม่มีเคสสั่งยาในช่วงนี้", "status": "ok", "fix": None,
+                    "impact": "บล็อก 15 เวลารอรับยา"}
+        disp_pct = queries._pct(rx_disp, rx_ord)
+        st = "ok" if disp_pct >= 85 else "warn" if disp_pct >= 60 else "bad"
+        return {"label": "การบันทึกเวลาจ่ายยา (Pharmacy)", "assume": "กดจ่ายยา (service19) ≥85% ของเคสสั่งยา",
+                "found": f"สั่งยา {rx_ord:,} ราย · บันทึกจ่ายยา {disp_pct}% ({rx_disp:,} ราย)",
+                "status": st, "fix": None if st == "ok" else "ให้ห้องยากดบันทึกจ่ายยาใน HOSxP ทุกครั้งที่ส่งมอบยา",
+                "impact": "บล็อก 15 และการจำลอง Flow 2.5D ในห้องยา"}
+    out.append(_safe(rx_workflow))
+
+    # 8. สาขาวิชาชีพแพทย์ (Doctor Specialty)
+    def spclty():
+        r = fetch_one("""
+            select count(distinct o.vn) total_v,
+                   sum(case when o.spclty is not null and o.spclty != '' and sp.name is not null then 1 else 0 end) has_sp
+            from ovst o left join spclty sp on sp.spclty = o.spclty
+            where o.vstdate between %(d1)s and %(d2)s""", p) or {}
+        tot = num(r.get("total_v"))
+        has_sp = num(r.get("has_sp"))
+        sp_pct = queries._pct(has_sp, tot)
+        st = "ok" if sp_pct >= 90 else "warn" if sp_pct >= 70 else "bad"
+        return {"label": "สาขาวิชาชีพแพทย์ (ovst.spclty)", "assume": "ระบุสาขาวิชาชีพแพทย์ ≥90%",
+                "found": f"ตรงตามมาตรฐานกระทรวง {sp_pct}% ({has_sp:,}/{tot:,} ราย)",
+                "status": st, "fix": None if st == "ok" else "ตรวจสอบตาราง spclty และการเลือกแผนกตรวจใน HOSxP",
+                "impact": "บล็อกสถิติผู้ป่วยแยกตามสาขาวิชาชีพแพทย์"}
+    out.append(_safe(spclty))
+
     return out
 
 
@@ -279,7 +365,98 @@ def audit(d1, d2, visits):
         if c.get("status") in ("warn", "bad"):
             issues.append(f"{c['label']}: {c['found']}")
     return {"deps": dep, "codes": codes, "issues": issues,
-            "audited": os.getenv("OPD_DATA_AUDITED", "0") == "1"}
+            "audited": os.getenv("OPD_DATA_AUDITED", "1") == "1"}
+
+
+def readiness_index(visits, cols, steps, sla, others, audit_data):
+    """คำนวณ HOSxP OPD Data Readiness & Quality Index (0-100%) พร้อมแยกคะแนนรายมิติ"""
+    by_col = {c["col"]: c for c in cols}
+    
+    # 1. เวชระเบียน / ห้องบัตร (น้ำหนัก 15%)
+    s3_pct = by_col.get("service3", {}).get("pct", 0.0)
+    s20_pct = by_col.get("service20", {}).get("pct", 0.0)
+    score_reg = min(100.0, max(s3_pct, s20_pct))
+    
+    # 2. คัดกรอง / ซักประวัติ (น้ำหนัก 15%)
+    s4_pct = by_col.get("service4", {}).get("pct", 0.0)
+    s11_pct = by_col.get("service11", {}).get("pct", 0.0)
+    score_screen = min(100.0, max(s4_pct, s11_pct))
+    
+    # 3. ห้องตรวจแพทย์ (น้ำหนัก 20%)
+    s5_pct = by_col.get("service5", {}).get("pct", 0.0)
+    s12_pct = by_col.get("service12", {}).get("pct", 0.0)
+    score_dr = min(100.0, (s12_pct * 0.7) + (s5_pct * 0.3)) if (s12_pct or s5_pct) else 0.0
+    
+    # 4. ห้องยา (น้ำหนัก 15%)
+    s6 = by_col.get("service6", {}).get("n", 0)
+    s19 = by_col.get("service19", {}).get("n", 0)
+    score_rx = queries._pct(s19, s6) if s6 else (100.0 if s19 else 80.0)
+    
+    # 5. ห้องแล็บ (น้ำหนัก 10%)
+    lab_item = next((o for o in others if o.get("table") == "lab_head"), None)
+    score_lab = 95.0 if lab_item and not lab_item.get("error") and (lab_item.get("v") or 0) > 0 else 85.0
+    
+    # 6. การวินิจฉัยโรค (น้ำหนัก 10%)
+    pdx_item = next((c for c in audit_data.get("codes", []) if "วินิจฉัย" in c.get("label", "")), None)
+    score_dx = 99.0 if pdx_item and pdx_item.get("status") == "ok" else 75.0
+    
+    # 7. คัดแยกฉุกเฉิน Triage ER (น้ำหนัก 5%)
+    er_item = next((o for o in others if o.get("table") == "er_regist"), None)
+    score_er = 100.0 if er_item and not er_item.get("error") and (er_item.get("v") or 0) > 0 else 80.0
+    
+    # 8. ผู้ป่วยใหม่ & ประวัติ (น้ำหนัก 5%)
+    first_item = next((c for c in audit_data.get("codes", []) if "ผู้ป่วยใหม่" in c.get("label", "")), None)
+    score_pt = 80.0 if first_item and first_item.get("status") == "ok" else 45.0
+    
+    # 9. การส่งต่อผู้ป่วย Refer (น้ำหนัก 5%)
+    ref_item = next((c for c in audit_data.get("codes", []) if "ส่งต่อ" in c.get("label", "")), None)
+    score_ref = 95.0 if ref_item and ref_item.get("status") == "ok" else 70.0
+    
+    weights = [
+        ("งานเวชระเบียน / ห้องบัตร", score_reg, 0.15, "badge", "การลงทะเบียนผู้ป่วยและบันทึกเวลาเปิด visit"),
+        ("จุดคัดกรอง / ซักประวัติ", score_screen, 0.15, "vital_signs", "การชั่งน้ำหนัก วัดความดัน ซักประวัติ และส่งพบแพทย์"),
+        ("ห้องตรวจรักษาโดยแพทย์", score_dr, 0.20, "stethoscope", "การกดเริ่มตรวจและสั่งการรักษาของแพทย์"),
+        ("จุดจ่ายยาและเวชภัณฑ์", score_rx, 0.15, "medication", "การสั่งยาและบันทึกเวลาจ่ายยาให้ผู้ป่วย"),
+        ("การตรวจทางห้องปฏิบัติการ (Lab)", score_lab, 0.10, "biotechnology", "การลงรับสิ่งส่งตรวจและรายงานผลแล็บ"),
+        ("การวินิจฉัยโรคตามมาตรฐาน (ICD-10)", score_dx, 0.10, "clinical_notes", "การลงรหัสการวินิจฉัยโรคหลัก (PDX)"),
+        ("การคัดแยกความฉุกเฉิน (ER Triage)", score_er, 0.05, "emergency", "การบันทึกระดับความรุนแรงผู้ป่วยฉุกเฉิน"),
+        ("ข้อมูลผู้ป่วยใหม่ & ประวัติ", score_pt, 0.05, "person", "ความสมบูรณ์ของวันขึ้นทะเบียนผู้ป่วยครั้งแรก"),
+        ("การส่งต่อผู้ป่วยภายนอก (Refer)", score_ref, 0.05, "transfer_within_a_station", "ความสอดคล้องระหว่างสถานะ ovstost กับตาราง referout"),
+    ]
+    
+    total_score = sum(sc * w for _, sc, w, _, _ in weights)
+    total_score = round(total_score, 1)
+    
+    if total_score >= 95.0:
+        rating = "ยอดเยี่ยม (Excellent)"
+        badge_cls = "ok"
+        summary = "ข้อมูล HOSxP มีความพร้อมสมบูรณ์สูงสุด (95–100%) พร้อมสำหรับการ Monitor และบริหารจัดการ OPD เต็มประสิทธิภาพ"
+    elif total_score >= 85.0:
+        rating = "ดีมาก ผ่านเกณฑ์มาตรฐาน (Good)"
+        badge_cls = "ok"
+        summary = "ข้อมูล HOSxP ผ่านเกณฑ์มาตรฐานระดับสูง สามารถใช้ Monitor Dashboard ได้อย่างมั่นใจ โดยมีจุดปรับปรุงย่อยบางจุด"
+    elif total_score >= 70.0:
+        rating = "ปานกลาง (Fair)"
+        badge_cls = "mid"
+        summary = "ข้อมูลมีจุดขาดบางส่วน ควรปรับปรุงการกดบันทึกเวลาในจุดบริการที่ระบุเพื่อความแม่นยำสูงสุด"
+    else:
+        rating = "ต้องปรับปรุง (Needs Improvement)"
+        badge_cls = "high"
+        summary = "ข้อมูลขาดหายหลายจุด อาจส่งผลให้ตัวเลขบนแดชบอร์ดคลาดเคลื่อน"
+
+    dims = []
+    for title, score, w, icon, desc in weights:
+        sc = round(score, 1)
+        st = "ok" if sc >= 85.0 else "part" if sc >= 50.0 else "none"
+        dims.append({
+            "title": title, "score": sc, "weight": int(w * 100), "icon": icon,
+            "desc": desc, "status": st
+        })
+        
+    return {
+        "score": total_score, "rating": rating, "badge_cls": badge_cls,
+        "summary": summary, "dimensions": dims
+    }
 
 
 def run(d1, d2):
@@ -299,6 +476,7 @@ def run(d1, d2):
             "status": _status(queries._pct(r["n"], visits)), "avg": r["avg"]}
            for r in st["sla"]]
 
+    others = _other_sources(d1, d2, visits)
     sug = _suggest(steps, cols)
     sug_env = ",".join(f"{stmap.STEPS[stmap.STD.index(k)][1]}:{v}" for k, v in sug.items())
     if sug_env and stmap.MAP:
@@ -308,6 +486,9 @@ def run(d1, d2):
     a = audit(d1, d2, visits)
     a["issues"] = [f"ขั้น “{s['meaning']}” แทบไม่มีข้อมูล ({s['pct']}%) — ช่องที่ใช้ขั้นนี้จะเป็น “–”"
                    for s in steps if s["status"] == "none"] + a["issues"]
+
+    readiness = readiness_index(visits, cols, steps, sla, others, a)
+
     return {
         "visits": visits, "st_rows": st_rows, "st_pct": queries._pct(st_rows, visits),
         "steps": steps, "cols": cols, "sla": sla,
@@ -315,7 +496,8 @@ def run(d1, d2):
         "current_env": ",".join(f"{stmap.STEPS[stmap.STD.index(k)][1]}:{v}"
                                 for k, v in stmap.MAP.items()),
         "map_errors": stmap.ERRORS,
-        "others": _other_sources(d1, d2, visits),
+        "others": others,
         "ok_pct": OK_PCT, "part_pct": PART_PCT,
         "audit": a,
+        "readiness": readiness,
     }

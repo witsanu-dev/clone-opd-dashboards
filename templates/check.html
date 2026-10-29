@@ -12,34 +12,73 @@
   {% set ST = {'ok': ('ok', 'ใช้ได้'), 'part': ('mid', 'บางส่วน'), 'none': ('high', 'แทบไม่มี')} %}
 
   <div class="page-h">
-    <a class="back" href="{{ url_for('dashboard') }}">‹ กลับแดชบอร์ด</a>
+    <a class="back" href="{{ url_for('dashboard') }}"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">arrow_back</span> กลับแดชบอร์ด</a>
     <div>
       <div class="ttl">ตรวจความพร้อมของข้อมูล HOSxP</div>
       <div class="sub">{{ hospital }} · {{ period }}</div>
     </div>
-    <a class="help-link" href="{{ url_for('help_page') }}#admin">ℹ คู่มือ</a>
+    <a class="help-link" href="{{ url_for('help_page') }}#admin"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">help</span> คู่มือ</a>
   </div>
 
   <form class="filters" method="get" action="{{ url_for('check_page') }}">
     <label>ตั้งแต่ <input type="date" name="d1" value="{{ d1 }}" required></label>
     <label>ถึง <input type="date" name="d2" value="{{ d2 }}" required></label>
-    <button type="submit">⟳ ตรวจ</button>
+    <button type="submit"><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">refresh</span> ตรวจ</button>
   </form>
-  {% if warn %}<div class="warn">⚠ {{ warn }}</div>{% endif %}
+  {% if warn %}<div class="warn"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">warning</span> {{ warn }}</div>{% endif %}
 
   {% set A = c.audit %}
+  {% set R = c.readiness %}
+  <div class="readiness-card">
+    <div class="readiness-badge {{ R.badge_cls }}">
+      <div class="num">{{ R.score }}%</div>
+      <div class="lbl">Readiness</div>
+    </div>
+    <div class="readiness-body">
+      <div class="rt-title">
+        <span class="material-symbols-outlined" style="font-size:1.2em;vertical-align:-2px">verified_user</span>
+        ดัชนีความพร้อมและคุณภาพข้อมูล HOSxP: {{ R.rating }}
+      </div>
+      <div class="rt-desc">{{ R.summary }}</div>
+      <div class="rt-tags">
+        <span class="pill ok"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:-1px">check</span> ข้อมูลจริง 100% ไม่ Make</span>
+        <span class="pill {{ R.badge_cls }}">คะแนนรวม {{ R.score }} / 100</span>
+        <span class="pill {{ 'ok' if c.st_pct >= 90 else 'mid' }}">service_time ครอบคลุม {{ c.st_pct }}%</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>ความพร้อมรายมิติเชิงระบบ (9 ด้านหลักของการบริหารงาน OPD)</h2>
+  <div class="readiness-grid">
+    {% for item in R.dimensions %}
+    <div class="dim-card">
+      <div class="dim-head">
+        <div class="dim-title">
+          <span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px;color:var(--navy)">{{ item.icon }}</span>
+          {{ item.title }}
+        </div>
+        <span class="pill {{ ST[item.status][0] }}">{{ item.score }}%</span>
+      </div>
+      <div class="dim-track">
+        <div class="dim-fill {{ item.status }}" {{ ('style="width:' ~ item.score ~ '%;"') | safe }}></div>
+      </div>
+      <div class="dim-desc">{{ item.desc }} (น้ำหนัก {{ item.weight }}%)</div>
+    </div>
+    {% endfor %}
+  </div>
+
   <div class="audit-sum {{ 'bad' if A.issues else 'good' }}">
     {% if A.issues %}
-    <div class="h">⚠ พบ {{ A.issues | length }} เรื่องที่ควรตรวจก่อนนำตัวเลขไปใช้</div>
+    <div class="h"><span class="material-symbols-outlined" style="font-size:1.2em;vertical-align:-2px">warning</span> พบ {{ A.issues | length }} เรื่องที่ควรตรวจก่อนนำตัวเลขไปใช้</div>
     <ul>{% for i in A.issues %}<li>{{ i }}</li>{% endfor %}</ul>
     {% else %}
-    <div class="h">✅ ไม่พบรหัสหรือข้อมูลที่ผิดปกติในช่วงที่ตรวจ</div>
+    <div class="h"><span class="material-symbols-outlined" style="font-size:1.2em;vertical-align:-2px">check_circle</span> ไม่พบรหัสหรือข้อมูลที่ผิดปกติในช่วงที่ตรวจ</div>
     {% endif %}
     <p class="note">ผลอัตโนมัติตรวจได้แค่สิ่งที่ “ดูผิดปกติ” — ให้เทียบตัวเลขบนแดชบอร์ดกับรายงานเดิมของโรงพยาบาลอย่างน้อย 1–2 สัปดาห์ก่อนใช้จริง</p>
     {% if A.audited %}
-    <p>✅ ผู้ดูแลยืนยันแล้ว (<code>OPD_DATA_AUDITED=1</code>) — แดชบอร์ดไม่แสดงแถบเตือน</p>
+    <p><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">check_circle</span> ผู้ดูแลยืนยันแล้ว (<code>OPD_DATA_AUDITED=1</code>) — แดชบอร์ดไม่แสดงแถบเตือน</p>
     {% else %}
-    <p><button type="button" class="audit-ok" data-audit-key="opd-audited:{{ hospital }}">✔ ยืนยันว่าตรวจแล้ว (เฉพาะเบราว์เซอร์นี้)</button>
+    <p><button type="button" class="audit-ok" data-audit-key="opd-audited:{{ hospital }}"><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">done</span> ยืนยันว่าตรวจแล้ว (เฉพาะเบราว์เซอร์นี้)</button>
       <span class="audit-done" hidden>ยืนยันแล้วในเบราว์เซอร์นี้ — <a href="#" class="audit-undo">ยกเลิก</a></span><br>
       <small>ยืนยันให้ทุกเครื่อง: ตั้ง <code>OPD_DATA_AUDITED=1</code> ใน <code>.env</code> แล้วรีสตาร์ตแอป</small></p>
     {% endif %}
@@ -51,7 +90,7 @@
       ช่องนั้นบนแดชบอร์ดจะเป็น “–” ให้ดูตารางคอลัมน์ทั้งหมดด้านล่างว่าจุดบริการนั้นกดลงคอลัมน์ไหน แล้วกำหนด <code>OPD_ST_MAP</code></p>
     <p>ช่วงที่ตรวจ: <b>{{ c.visits | n }}</b> visit · มีแถวใน service_time <b>{{ c.st_pct }}%</b>
       {% if c.current_env %}· ใช้ค่า <code>OPD_ST_MAP={{ c.current_env }}</code>{% else %}· ใช้คอลัมน์ตามค่าเริ่มต้น{% endif %}</p>
-    {% if c.map_errors %}<div class="warn">⚠ อ่านค่าใน OPD_ST_MAP ไม่ได้: <code>{{ c.map_errors | join(', ') }}</code>
+    {% if c.map_errors %}<div class="warn"><span class="material-symbols-outlined" style="font-size:1.15em;vertical-align:-2px">warning</span> อ่านค่าใน OPD_ST_MAP ไม่ได้: <code>{{ c.map_errors | join(', ') }}</code>
       (รูปแบบ <code>ชื่อขั้น:serviceN</code> คั่นด้วยจุลภาค)</div>{% endif %}
 
     {% if c.suggest_env %}
@@ -131,7 +170,7 @@
       <tr class="{{ 'audit-warn' if x.warn }}"><td><code>{{ x.code or '–' }}</code></td><td>{{ x.name }}</td>
         <td>{{ x.n | n }}</td><td>{{ x.pct }}%</td>
         <td>{% if x.group %}<code>{{ x.group }}</code>{% else %}—{% endif %}{% if x.override %} <small>(OPD_DEP_MAP)</small>{% endif %}</td>
-        <td><small>{{ x.label }}</small>{% if x.warn %}<br><b>⚠ ตรวจว่าควรอยู่กลุ่มไหน</b>{% endif %}</td></tr>
+        <td><small>{{ x.label }}</small>{% if x.warn %}<br><b><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px;color:var(--orange)">warning</span> ตรวจว่าควรอยู่กลุ่มไหน</b>{% endif %}</td></tr>
       {% endfor %}
     </table></div>
     <p class="note">แผนกที่จัดผิดกลุ่มทำให้ตัวเลขทั้งบล็อกเพี้ยน (เช่น ER ไม่ถูกแยก, คลินิกไปอยู่หน้าห้องตรวจในผังผู้ป่วย)

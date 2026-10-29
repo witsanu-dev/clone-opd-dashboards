@@ -1,8 +1,8 @@
 {#- ท้ายทุกหน้า: เวอร์ชัน · คู่มือ · ช่องทางติดต่อ -#}
 <div class="appinfo">
   <span><b>OPD Dashboard</b> เวอร์ชัน {{ version }}</span>
-  <a href="{{ url_for('help_page') }}">📘 คู่มือการใช้งาน</a>
-  {% if drilldown %}<a href="{{ url_for('check_page') }}">🩺 ตรวจข้อมูล</a>{% endif %}
-  <span>📞 ติดต่อ: {{ contact }}</span>
-  {% if dev_contact and dev_contact != contact %}<span>🛠 ผู้พัฒนา: {{ dev_contact }}</span>{% endif %}
+  <a href="{{ url_for('help_page') }}"><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">menu_book</span> คู่มือการใช้งาน</a>
+  {% if drilldown %}<a href="{{ url_for('check_page') }}"><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">health_and_safety</span> ตรวจข้อมูล</a>{% endif %}
+  <span><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">call</span> ติดต่อ: {{ contact }}</span>
+  {% if dev_contact and dev_contact != contact %}<span><span class="material-symbols-outlined" style="font-size:1.1em;vertical-align:-2px">engineering</span> ผู้พัฒนา: {{ dev_contact }}</span>{% endif %}
 </div>

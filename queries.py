@@ -58,6 +58,30 @@ TARGET_PEAK = int(os.getenv("OPD_TARGET_PEAK", "100"))         # ผู้ป่
 #: ช่วงชั่วโมงที่แสดงในกราฟรายชั่วโมง (นอกช่วงนี้นับรวมเป็น "นอกเวลา")
 HOUR_FROM, HOUR_TO = 6, 20
 
+#: แผนกฉุกเฉิน (ER)
+ER_DEP = os.getenv("OPD_ER_DEP")
+EXCLUDE_ER = os.getenv("OPD_EXCLUDE_ER", "1") == "1"
+
+
+def _er_deps():
+    """รหัสแผนก ER — ส่งเป็นพารามิเตอร์ `not in %(er)s` (รายการว่างใส่ '' กัน SQL `in ()`)"""
+    codes = [c.strip() for c in ER_DEP.split(",")] if ER_DEP else deps.codes_in("ER")
+    return [c for c in codes if c] or [""]
+
+
+def _er_cond(o_alias="o"):
+    if not EXCLUDE_ER:
+        return ""
+    return (f" and not exists (select 1 from er_regist _er where _er.vn = {o_alias}.vn)"
+            f" and ifnull({o_alias}.main_dep, '') not in %(er)s")
+
+
+def _st_er_cond(s_alias="s"):
+    if not EXCLUDE_ER:
+        return ""
+    return (f" and not exists (select 1 from er_regist _er where _er.vn = {s_alias}.vn)"
+            f" and ifnull({s_alias}.service5_dep, '') not in %(er)s")
+
 #: เวลาจบบริการ = ขั้นสุดท้ายที่มีบันทึก (ไม่มียา/ไม่ต้องจ่ายเงิน ก็จบที่ตรวจเสร็จ)
 FINISH = ("greatest(" + ", ".join(
     f"ifnull(s.{c},'00:00:00')"
@@ -97,12 +121,19 @@ def _prev_period(d1, d2):
 
 # ------------------------------------------------- เวลาแต่ละขั้น (service_time)
 
-def service_times(d1, d2):
+def service_times(d1, d2, dep=None):
     """เวลาเฉลี่ยทุกขั้นตอน + เวลารวมต่อรายในคำสั่งเดียว"""
     cols = []
     for i, (_, a, b, _) in enumerate(SLA):
         cols.append(f"{_gap_avg(a, b)} g{i}")
         cols.append(f"{_gap_n(a, b)} n{i}")
+    params = {"d1": d1, "d2": d2, "er": _er_deps()}
+    join_dep = ""
+    dep_cond = ""
+    if dep:
+        join_dep = "join ovst _o on _o.vn = s.vn"
+        dep_cond = "and _o.main_dep = %(dep)s"
+        params["dep"] = dep
     r = fetch_one(f"""
         select {', '.join(cols)},
           avg(case when tt between 1 and {MAX_TOTAL} then tt end) total_avg,
@@ -110,7 +141,10 @@ def service_times(d1, d2):
           sum(tt between 1 and 120) done_120
         from (select s.*, time_to_sec(timediff({FINISH}, s.vsttime))/60 tt
               from {stmap.TABLE} s
-              where s.vstdate between %(d1)s and %(d2)s and s.vsttime is not null) s""", {"d1": d1, "d2": d2})
+              {join_dep}
+              where s.vstdate between %(d1)s and %(d2)s and s.vsttime is not null
+              {dep_cond}
+              {_st_er_cond('s')}) s""", params)
 
     rows = []
     for i, (label, _, _, target) in enumerate(SLA):
@@ -130,21 +164,29 @@ def service_times(d1, d2):
 
 # ---------------------------------------------------------------- 1. KPI
 
-def visit_counts(d1, d2):
+def visit_counts(d1, d2, dep=None):
+    params = {"d1": d1, "d2": d2, "er": _er_deps()}
+    dep_cond = ""
+    if dep:
+        dep_cond = " and o.main_dep = %(dep)s"
+        params["dep"] = dep
     r = fetch_one(f"""
-        select count(*) total, sum(p.firstday = o.vstdate) new_pt
+        select count(*) total, sum(p.firstday = o.vstdate) new_pt,
+          sum(exists(select 1 from er_regist _er where _er.vn = o.vn) or o.main_dep in %(er)s) er_pt
         from ovst o left join patient p on p.hn = o.hn
-        where o.vstdate between %(d1)s and %(d2)s""", {"d1": d1, "d2": d2})
+        where o.vstdate between %(d1)s and %(d2)s
+        {dep_cond}
+        {_er_cond('o') if EXCLUDE_ER else ''}""", params)
     total, new = num(r.get("total")), num(r.get("new_pt"))
-    return {"total": total, "new": new, "old": total - new}
+    return {"total": total, "new": new, "old": total - new, "er_pt": num(r.get("er_pt"))}
 
 
-def kpi_summary(d1, d2, st):
+def kpi_summary(d1, d2, st, dep=None):
     p1, p2, span = _prev_period(d1, d2)
-    cur = visit_counts(d1, d2)
-    prev = visit_counts(p1, p2)
-    st_prev = service_times(p1, p2)
-    wait_dr = next(r for r in st["sla"] if r["label"] == "รอพบแพทย์")
+    cur = visit_counts(d1, d2, dep=dep)
+    prev = visit_counts(p1, p2, dep=dep)
+    st_prev = service_times(p1, p2, dep=dep)
+    wait_dr = next((r for r in st["sla"] if r["label"] == "รอพบแพทย์"), {"avg": None})
     return {
         "period": {"d1": d1, "d2": d2, "prev_d1": p1, "prev_d2": p2, "days": span},
         **cur,
@@ -160,11 +202,18 @@ def kpi_summary(d1, d2, st):
 
 # ----------------------------------------------- 2/9. ผู้ป่วยตามช่วงเวลา
 
-def hourly(d1, d2, days):
+def hourly(d1, d2, days, dep=None):
+    params = {"d1": d1, "d2": d2, "appt": APPT_CODES, "er": _er_deps()}
+    dep_cond = ""
+    if dep:
+        dep_cond = " and o.main_dep = %(dep)s"
+        params["dep"] = dep
     rows = fetch(f"""
         select hour(o.vsttime) h, count(*) c, sum(o.ovstist in %(appt)s) appt
         from ovst o where o.vstdate between %(d1)s and %(d2)s and o.vsttime is not null
-        group by h""", {"d1": d1, "d2": d2, "appt": APPT_CODES})
+        {dep_cond}
+        {_er_cond('o')}
+        group by h""", params)
     by_h = {num(r["h"]): r for r in rows}
     out = []
     for h in range(HOUR_FROM, HOUR_TO + 1):
@@ -228,7 +277,12 @@ def departments(d1, d2):
 FLOW_COLORS = ["#1565d8", "#1e8e5a", "#f5b70a", "#f47b16", "#7048c8", "#12b5d6", "#6b7280"]
 
 
-def patient_flow(d1, d2):
+def patient_flow(d1, d2, dep=None):
+    params = {"d1": d1, "d2": d2, "er": _er_deps()}
+    dep_cond = ""
+    if dep:
+        dep_cond = " and o.main_dep = %(dep)s"
+        params["dep"] = dep
     r = fetch_one(f"""
         select count(*) total,
           sum(s.service4 is not null or s.service11 is not null) screened,
@@ -236,11 +290,14 @@ def patient_flow(d1, d2):
           sum(s.service5 is not null or s.service12 is not null) seen_dr,
           sum(s.service6 is not null or s.service16 is not null) rx,
           sum(s.service7 is not null) paid,
-          sum(o.an is null and s.vn is not null and {FINISH} > s.vsttime) home,
+          sum(o.an is null and ifnull(o.ovstost, '') != '54' and s.vn is not null and {FINISH} > s.vsttime) home,
+          sum(o.an is null and o.ovstost = '54') refer,
           sum(o.an is not null) admitted,
           sum((s.service5 is not null or s.service12 is not null) and s.service11 is null) direct_dr
         from ovst o left join {stmap.TABLE} s on s.vn = o.vn
-        where o.vstdate between %(d1)s and %(d2)s""", {"d1": d1, "d2": d2})
+        where o.vstdate between %(d1)s and %(d2)s
+        {dep_cond}
+        {_er_cond('o')}""", params)
     total = num(r.get("total"))
     # พบแพทย์โดยไม่มีเวลา "ส่งพบแพทย์" (เช่น ทันตกรรมไม่ผ่านจุดคัดกรอง) — แท่งพบแพทย์จึงยาวกว่าส่งพบแพทย์
     direct = []
@@ -250,45 +307,52 @@ def patient_flow(d1, d2):
             from ovst o join {stmap.TABLE} s on s.vn = o.vn
             where o.vstdate between %(d1)s and %(d2)s and s.service11 is null
               and (s.service5 is not null or s.service12 is not null)
-            group by 1 order by n desc limit 2""", {"d1": d1, "d2": d2})]
-    steps = [("ลงทะเบียน", total, "📋"),
-             ("คัดกรอง", num(r.get("screened")), "🩺"),
-             ("ส่งพบแพทย์", num(r.get("sent_dr")), "⏳"),
-             ("พบแพทย์", num(r.get("seen_dr")), "👨‍⚕️"),
-             ("ห้องยา", num(r.get("rx")), "💊"),
-             ("ชำระเงิน", num(r.get("paid")), "💳"),
-             ("กลับบ้าน", num(r.get("home")), "🏠")]
+              {dep_cond}
+              {_er_cond('o')}
+            group by 1 order by n desc limit 2""", params)]
+    steps = [("ลงทะเบียน", total, "how_to_reg"),
+             ("คัดกรอง", num(r.get("screened")), "vital_signs"),
+             ("ส่งพบแพทย์", num(r.get("sent_dr")), "pending_actions"),
+             ("พบแพทย์", num(r.get("seen_dr")), "medical_services"),
+             ("ห้องยา", num(r.get("rx")), "medication"),
+             ("ชำระเงิน", num(r.get("paid")), "payments"),
+             ("กลับบ้าน", num(r.get("home")), "home")]
     return {"steps": [{"label": l, "value": v, "pct": round(_pct(v, total)), "icon": ic,
                        "color": FLOW_COLORS[i]} for i, (l, v, ic) in enumerate(steps)],
             "admitted": num(r.get("admitted")),
+            "refer": num(r.get("refer")),
             "direct_dr": num(r.get("direct_dr")), "direct_top": direct}
 
 
 # ---------------------------------------------------- 7. การนัดหมาย
 
-def appointments(d1, d2, total):
-    """การนัดหมาย — ใช้นิยามเดียวกับบล็อก Alert ทุกตัวเลข
-
-    อัตราผิดนัด = นัดที่ไม่มา ÷ นัดทั้งหมด (oapp.nextdate ในช่วงที่เลือก)
-    "มา" = มี visit ของ HN นั้นในวันนัด · นับเฉพาะวันที่ผ่านไปแล้ว — นัดของวันนี้ยังมาได้อีก
-    จึงแสดงแยกเป็น "นัดวันนี้" ไม่นับเป็นผิดนัด
-    Walk-in / มาตามนัด ของ visit (ovst.ovstist ใน APPT_CODES) แสดงแยกเป็นข้อมูลประกอบ
-    """
+def appointments(d1, d2, total, dep=None):
+    """การนัดหมาย — ใช้นิยามเดียวกับบล็อก Alert ทุกตัวเลข"""
     today = date.today().isoformat()
+    o_dep = " and o.main_dep = %(dep)s" if dep else ""
+    a_dep = " and (a.depcode = %(dep)s or exists(select 1 from ovst _o where _o.vn = a.vn and _o.main_dep = %(dep)s))" if dep else ""
+    o_came_dep = " and o.main_dep = %(dep)s" if dep else ""
+    params_o = {"d1": d1, "d2": d2, "appt": APPT_CODES}
+    params_a = {"d1": d1, "d2": d2, "today": today}
+    if dep:
+        params_o["dep"] = dep
+        params_a["dep"] = dep
+
     appt_visits = num(fetch_one(f"""
         select count(*) c from ovst o
-        where o.vstdate between %(d1)s and %(d2)s and o.ovstist in %(appt)s""",
-        {"d1": d1, "d2": d2, "appt": APPT_CODES}).get("c"))
+        where o.vstdate between %(d1)s and %(d2)s and o.ovstist in %(appt)s
+        {o_dep}""", params_o).get("c"))
     r = fetch_one(f"""
         select sum(a.nextdate < %(today)s) booked,
           sum(a.nextdate < %(today)s and exists(select 1 from ovst o
-              where o.hn = a.hn and o.vstdate = a.nextdate)) came,
+              where o.hn = a.hn and o.vstdate = a.nextdate{o_came_dep})) came,
           sum(a.nextdate >= %(today)s) booked_today,
           sum(a.nextdate >= %(today)s and exists(select 1 from ovst o
-              where o.hn = a.hn and o.vstdate = a.nextdate)) came_today
-        from oapp a where a.nextdate between %(d1)s and %(d2)s""", {"d1": d1, "d2": d2, "today": today})
+              where o.hn = a.hn and o.vstdate = a.nextdate{o_came_dep})) came_today
+        from oapp a where a.nextdate between %(d1)s and %(d2)s
+        {a_dep}""", params_a)
     booked, came = num(r.get("booked")), num(r.get("came"))
-    noshow = booked - came
+    noshow = max(0, booked - came)
     items = [
         {"label": "มาตามนัด", "value": came, "color": "#1e8e5a"},
         {"label": "ผิดนัด (No-show)", "value": noshow, "color": "#dc3545"},
@@ -307,15 +371,23 @@ def appointments(d1, d2, total):
 PALETTE = ["#1565d8", "#1e8e5a", "#f5b70a", "#f47b16", "#7048c8"]
 
 
-def patient_profile(d1, d2, total):
+def patient_profile(d1, d2, total, dep=None):
+    params = {"d1": d1, "d2": d2, "er": _er_deps()}
+    dep_cond = ""
+    if dep:
+        dep_cond = " and o.main_dep = %(dep)s"
+        params["dep"] = dep
+
     rights = fetch(f"""
         select p.name, count(*) c
         from ovst o left join pttype p on p.pttype = o.pttype
         where o.vstdate between %(d1)s and %(d2)s
-        group by p.name order by c desc limit 5""", {"d1": d1, "d2": d2})
+        {dep_cond}
+        {_er_cond('o')}
+        group by p.name order by c desc limit 5""", params)
     items = [{"label": r["name"] or "ไม่ระบุสิทธิ", "value": num(r["c"]), "pct": _pct(num(r["c"]), total),
               "color": PALETTE[i % 5]} for i, r in enumerate(rights)]
-    rest = total - sum(i["value"] for i in items)
+    rest = max(0, total - sum(i["value"] for i in items))
     if rest > 0:
         items.append({"label": "อื่น ๆ", "value": rest, "pct": _pct(rest, total),
                       "color": "#94a3b8"})
@@ -325,12 +397,30 @@ def patient_profile(d1, d2, total):
         from ovstdiag d join ovst o on o.vn = d.vn
              left join icd101 c on c.code = d.icd10
         where d.diagtype = '1' and o.vstdate between %(d1)s and %(d2)s
-        group by d.icd10, name order by cnt desc limit 5""", {"d1": d1, "d2": d2})
+        {dep_cond}
+        {_er_cond('o')}
+        group by d.icd10, name order by cnt desc limit 5""", params)
     dx_items = [{"label": r["name"], "code": r["icd10"], "value": num(r["cnt"])} for r in dx]
     top = max((i["value"] for i in dx_items), default=1)
     for it in dx_items:
         it["bar"] = _pct(it["value"], top)
-    return {"rights": items, "dx": dx_items}
+
+    ref_row = fetch_one(f"""
+        select count(distinct o.vn) total,
+               sum(case when o.ovstost = '54' then 1 else 0 end) by_ovstost,
+               sum(case when ro.vn is not null then 1 else 0 end) by_referout
+        from ovst o left join referout ro on ro.vn = o.vn
+        where o.vstdate between %(d1)s and %(d2)s
+          and (o.ovstost = '54' or ro.vn is not null)
+          {dep_cond}
+          {_er_cond('o')}""", params) or {}
+    refer = {
+        "total": num(ref_row.get("total")),
+        "by_referout": num(ref_row.get("by_referout")),
+        "by_ovstost": num(ref_row.get("by_ovstost")),
+    }
+
+    return {"rights": items, "dx": dx_items, "refer": refer}
 
 
 # ------------------------------------------------------ 10. Alert & Action
@@ -377,14 +467,7 @@ def alerts(kpi, st, appt, hrs):
 
 #: ช่วงชั่วโมงของกราฟคอขวด (เวลาราชการ)
 BN_FROM, BN_TO = 6, 16
-#: แผนกที่ไม่นับใน "แพทย์เริ่มตรวจคนแรกของวัน" — ER ตรวจตลอด 24 ชม.
-ER_DEP = os.getenv("OPD_ER_DEP")       # ไม่ตั้ง = หาแผนกชื่อ ER/ฉุกเฉิน จาก kskdepartment
 
-
-def _er_deps():
-    """รหัสแผนก ER — ส่งเป็นพารามิเตอร์ `not in %(er)s` (รายการว่างใส่ '' กัน SQL `in ()`)"""
-    codes = [c.strip() for c in ER_DEP.split(",")] if ER_DEP else deps.codes_in("ER")
-    return [c for c in codes if c] or [""]
 
 #: เป้าหมาย Lab TAT ผู้ป่วยนอก (สั่ง → รายงานผล, นาที)
 TARGET_LAB_TAT = int(os.getenv("OPD_TARGET_LAB_TAT", "60"))
@@ -414,19 +497,31 @@ def _avg_or_none(v):
     return round(num(v)) if v is not None else None
 
 
-def doctor_flow(d1, d2, hrs):
+def doctor_flow(d1, d2, hrs, dep=None):
     """ผู้ป่วยมาถึง vs แพทย์เริ่มตรวจ รายชั่วโมง + เวลารอพบแพทย์ตามชั่วโมงที่มาถึง"""
+    params = {"d1": d1, "d2": d2, "er": _er_deps()}
+    join_dep = ""
+    dep_cond = ""
+    if dep:
+        join_dep = "join ovst _o on _o.vn = s.vn"
+        dep_cond = "and _o.main_dep = %(dep)s"
+        params["dep"] = dep
+
     rows = fetch(f"""
         select 'e' k, hour(s.service5) h, count(*) n, null w
         from {stmap.TABLE} s
+        {join_dep}
         where s.vstdate between %(d1)s and %(d2)s and s.service5 >= '06:00'
+        {dep_cond}
         group by h
         union all
         select 'w' k, hour(s.vsttime) h, {_gap_n('service11', 'service5')} n,
           {_gap_avg('service11', 'service5')} w
         from {stmap.TABLE} s
+        {join_dep}
         where s.vstdate between %(d1)s and %(d2)s and s.vsttime is not null
-        group by h""", {"d1": d1, "d2": d2})
+        {dep_cond}
+        group by h""", params)
     exam = {num(r["h"]): num(r["n"]) for r in rows if r["k"] == "e"}
     wait = {num(r["h"]): r for r in rows if r["k"] == "w"}
     arr = {h["h"]: h["total"] for h in hrs["hours"]}
@@ -442,10 +537,12 @@ def doctor_flow(d1, d2, hrs):
     first = fetch(f"""
         select s.vstdate d, time_to_sec(min(s.service5)) f
         from {stmap.TABLE} s
+        {join_dep}
         where s.vstdate between %(d1)s and %(d2)s and s.service5 >= '06:00'
           and dayofweek(s.vstdate) between 2 and 6
           and ifnull(s.service5_dep, '') not in %(er)s
-        group by s.vstdate""", {"d1": d1, "d2": d2, "er": _er_deps()})
+          {dep_cond}
+        group by s.vstdate""", params)
     secs = sorted(num(r["f"]) for r in first if r.get("f") is not None)
     median = None
     if secs:
@@ -469,12 +566,18 @@ def doctor_flow(d1, d2, hrs):
     }
 
 
-def appointment_times(d1, d2):
+def appointment_times(d1, d2, dep=None):
     """การกระจายเวลานัด (oapp.nexttime) ของนัดที่ตกในช่วงวันที่เลือก"""
+    params = {"d1": d1, "d2": d2}
+    dep_cond = ""
+    if dep:
+        dep_cond = "and (a.depcode = %(dep)s or exists(select 1 from ovst _o where _o.vn = a.vn and _o.main_dep = %(dep)s))"
+        params["dep"] = dep
     rows = fetch(f"""
         select time_format(a.nexttime, '%%H:%%i') t, count(*) c
         from oapp a where a.nextdate between %(d1)s and %(d2)s
-        group by t order by c desc""", {"d1": d1, "d2": d2})
+        {dep_cond}
+        group by t order by c desc""", params)
     total = sum(num(r["c"]) for r in rows)
     slots, other, unset = [], 0, 0
     for r in rows:
@@ -497,12 +600,17 @@ def appointment_times(d1, d2):
     return {"slots": slots, "total": total, "main": main}
 
 
-def lab_tat(d1, d2):
+def lab_tat(d1, d2, dep=None):
     """Lab TAT ผู้ป่วยนอก (สั่ง → รับสิ่งส่งตรวจ → รายงานผล) ตามชั่วโมงที่สั่ง
 
     เฉพาะ visit ที่ไม่ admit และสั่ง/รับ/รายงานผลภายในวันเดียวกับวันมารับบริการ
     ตัดทิ้งทั้งใบถ้าช่วงใดช่วงหนึ่งติดลบ/เกิน 6 ชม. — สองช่วงจึงรวมกันได้เท่ากับ TAT พอดี
     """
+    params = {"d1": d1, "d2": d2}
+    dep_cond = ""
+    if dep:
+        dep_cond = "and o.main_dep = %(dep)s"
+        params["dep"] = dep
     rows = fetch(f"""
         select x.h, count(*) n, avg(x.a) o2r, avg(x.b) r2p
         from (select hour(l.order_time) h,
@@ -512,9 +620,10 @@ def lab_tat(d1, d2):
               where o.vstdate between %(d1)s and %(d2)s and o.an is null
                 and l.order_date = o.vstdate and l.receive_date = o.vstdate
                 and l.report_date = o.vstdate
-                and hour(l.order_time) between {BN_FROM} and {BN_TO}) x
+                and hour(l.order_time) between {BN_FROM} and {BN_TO}
+                {dep_cond}) x
         where x.a between 0 and {MAX_GAP} and x.b between 0 and {MAX_GAP}
-        group by x.h""", {"d1": d1, "d2": d2})
+        group by x.h""", params)
     by_h = {num(r["h"]): r for r in rows}
     hours, n_all, tot = [], 0, 0.0
     for h in _bn_hours():
@@ -533,9 +642,14 @@ def lab_tat(d1, d2):
             "worst": worst, "target": TARGET_LAB_TAT}
 
 
-def screening_lab(d1, d2):
+def screening_lab(d1, d2, dep=None):
     """เวลาคัดกรอง (service4 → service11) แยก visit ที่มี Lab สั่งก่อนพบแพทย์ vs ไม่มี"""
     m = _mins("service4", "service11")
+    params = {"d1": d1, "d2": d2}
+    dep_cond = ""
+    if dep:
+        dep_cond = "and o.main_dep = %(dep)s"
+        params["dep"] = dep
     rows = fetch(f"""
         select x.lab, count(*) n, avg(x.m) avg_m
         from (select exists(select 1 from lab_head l
@@ -544,9 +658,10 @@ def screening_lab(d1, d2):
                      {m} m
               from {stmap.TABLE} s join ovst o on o.vn = s.vn
               where s.vstdate between %(d1)s and %(d2)s and o.an is null
-                and s.service4 is not null and s.service11 is not null) x
+                and s.service4 is not null and s.service11 is not null
+                {dep_cond}) x
         where x.m between 0 and {MAX_GAP}
-        group by x.lab""", {"d1": d1, "d2": d2})
+        group by x.lab""", params)
     by = {str(num(r["lab"])): r for r in rows}
     out = []
     for key, label, color in (("1", "มี Lab ก่อนพบแพทย์", "#dc3545"),
@@ -564,14 +679,23 @@ def screening_lab(d1, d2):
     return {"groups": out, "ratio": ratio}
 
 
-def pharmacy_wait(d1, d2):
+def pharmacy_wait(d1, d2, dep=None):
     """เวลารอรับยา (service6 → service16) ตามชั่วโมงที่ใบสั่งยาถึงห้องยา"""
+    params = {"d1": d1, "d2": d2}
+    join_dep = ""
+    dep_cond = ""
+    if dep:
+        join_dep = "join ovst _o on _o.vn = s.vn"
+        dep_cond = "and _o.main_dep = %(dep)s"
+        params["dep"] = dep
     rows = fetch(f"""
         select hour(s.service6) h, {_gap_n('service6', 'service16')} n,
           {_gap_avg('service6', 'service16')} w
         from {stmap.TABLE} s
+        {join_dep}
         where s.vstdate between %(d1)s and %(d2)s and s.service6 is not null
-        group by h""", {"d1": d1, "d2": d2})
+        {dep_cond}
+        group by h""", params)
     by_h = {num(r["h"]): r for r in rows}
     target = next(t for label, a, b, t in SLA if a == "service6")
     hours = []
@@ -586,13 +710,13 @@ def pharmacy_wait(d1, d2):
     return {"hours": hours, "target": target, "worst": worst, "best": best}
 
 
-def bottleneck(d1, d2, hrs):
+def bottleneck(d1, d2, hrs, dep=None):
     return {
-        "dr": doctor_flow(d1, d2, hrs),
-        "appt": appointment_times(d1, d2),
-        "lab": lab_tat(d1, d2),
-        "screen": screening_lab(d1, d2),
-        "rx": pharmacy_wait(d1, d2),
+        "dr": doctor_flow(d1, d2, hrs, dep=dep),
+        "appt": appointment_times(d1, d2, dep=dep),
+        "lab": lab_tat(d1, d2, dep=dep),
+        "screen": screening_lab(d1, d2, dep=dep),
+        "rx": pharmacy_wait(d1, d2, dep=dep),
     }
 
 
@@ -600,19 +724,25 @@ def bottleneck(d1, d2, hrs):
 
 def dept_table(d1, d2):
     """ทุกแผนก (ovst.main_dep): จำนวน visit, เวลารอพบแพทย์, เวลารวม, % จบใน 2 ชม."""
-    rows = fetch(f"""
-        select o.main_dep dep, k.department name, count(*) n,
-          sum(p.firstday = o.vstdate) new_pt,
-          {_gap_avg('service11', 'service5')} wait_dr,
-          avg(case when s.tt between 1 and {MAX_TOTAL} then s.tt end) total_avg,
-          sum(s.tt between 1 and 120) done, sum(s.tt between 1 and {MAX_TOTAL}) tn
-        from ovst o
-          left join kskdepartment k on k.depcode = o.main_dep
-          left join patient p on p.hn = o.hn
-          left join (select s.*, time_to_sec(timediff({FINISH}, s.vsttime))/60 tt
-                     from {stmap.TABLE} s where s.vstdate between %(d1)s and %(d2)s) s on s.vn = o.vn
-        where o.vstdate between %(d1)s and %(d2)s
-        group by o.main_dep, k.department order by n desc""", {"d1": d1, "d2": d2})
+    try:
+        rows = fetch(f"""
+            select o.main_dep dep, k.department name, count(*) n,
+              sum(p.firstday = o.vstdate) new_pt,
+              {_gap_avg('service11', 'service5')} wait_dr,
+              avg(case when s.tt between 1 and {MAX_TOTAL} then s.tt end) total_avg,
+              sum(s.tt between 1 and 120) done, sum(s.tt between 1 and {MAX_TOTAL}) tn
+            from ovst o
+              left join kskdepartment k on k.depcode = o.main_dep
+              left join patient p on p.hn = o.hn
+              left join (select s.*, time_to_sec(timediff({FINISH}, s.vsttime))/60 tt
+                         from {stmap.TABLE} s where s.vstdate between %(d1)s and %(d2)s) s on s.vn = o.vn
+            where o.vstdate between %(d1)s and %(d2)s
+            group by o.main_dep, k.department order by n desc""", {"d1": d1, "d2": d2})
+    except Exception:
+        snap = _load_snapshot()
+        if snap and snap.get("dept_table"):
+            return snap["dept_table"]
+        raise
     out = []
     for r in rows:
         tn = num(r.get("tn"))
@@ -810,55 +940,154 @@ CACHE_TTL = int(os.getenv("OPD_CACHE_TTL", "120"))
 _cache = TTLCache(maxsize=32)
 
 
-def build(d1=None, d2=None):
+def department_doctors(d1, d2, dep):
+    """แพทย์ที่ออกตรวจในแผนกนี้ (Top 5): จำนวนตรวจ, เวลารอพบแพทย์เฉลี่ย, เวลาตรวจเฉลี่ยต่อเคส"""
+    if not dep:
+        return []
+    rows = fetch(f"""
+        select o.doctor, d.name, count(*) c,
+          {_gap_avg('service11', 'service5')} wait_dr,
+          {_gap_avg('service5', 'service12')} exam_m
+        from ovst o
+          left join doctor d on d.code = o.doctor
+          left join {stmap.TABLE} s on s.vn = o.vn
+        where o.vstdate between %(d1)s and %(d2)s
+          and o.main_dep = %(dep)s
+          and o.doctor is not null and o.doctor != ''
+        group by o.doctor, d.name
+        order by c desc limit 5""", {"d1": d1, "d2": d2, "dep": dep})
+    out = []
+    top = max((num(r["c"]) for r in rows), default=1)
+    for r in rows:
+        out.append({
+            "code": r["doctor"] or "",
+            "name": r["name"] or "ไม่ระบุชื่อแพทย์",
+            "count": num(r["c"]),
+            "wait_dr": _avg_or_none(r.get("wait_dr")),
+            "exam_m": _avg_or_none(r.get("exam_m")),
+            "bar": _pct(num(r["c"]), top)
+        })
+    return out
+
+
+def department_info(dep):
+    """ข้อมูลรายละเอียดของแผนก: รหัส, ชื่อ, กลุ่มงาน"""
+    if not dep:
+        return None
+    r = fetch_one("""
+        select depcode, department from kskdepartment where depcode = %(dep)s
+    """, {"dep": dep})
+    if not r:
+        return {"dep": dep, "name": f"แผนก {dep}", "group": deps.group_of(dep)}
+    return {
+        "dep": r["depcode"],
+        "name": r["department"] or f"แผนก {dep}",
+        "group": deps.group_of(r["depcode"]),
+        "group_name": deps.name_of(r["depcode"]) or ""
+    }
+
+
+def specialties(d1, d2):
+    """ผู้ป่วยจำแนกตามสาขาวิชาชีพแพทย์ (ovst.spclty) ตามมาตรฐานกระทรวงสาธารณสุข"""
+    rows = fetch(f"""
+        select o.spclty code, ifnull(nullif(sp.name, ''), 'ไม่ระบุสาขา') name, count(*) c,
+          sum(s.service5 is not null or s.service12 is not null) seen,
+          {_gap_avg('service11', 'service5')} wait_dr
+        from ovst o
+          left join spclty sp on sp.spclty = o.spclty
+          left join {stmap.TABLE} s on s.vn = o.vn
+        where o.vstdate between %(d1)s and %(d2)s
+        {_er_cond('o')}
+        group by o.spclty, name order by c desc""", {"d1": d1, "d2": d2, "er": _er_deps()})
+    allrows = [{"code": r["code"] or "-", "name": r["name"], "count": num(r["c"]),
+                "seen": num(r["seen"]),
+                "wait_dr": round(num(r["wait_dr"])) if r.get("wait_dr") is not None else None}
+               for r in rows]
+    top = max([d["count"] for d in allrows] + [1])
+    for d in allrows:
+        d["bar"] = _pct(d["count"], top)
+    return allrows
+
+
+def _load_snapshot(dep=None):
+    snapshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_snapshot.json")
+    if not os.path.exists(snapshot_path):
+        return None
+    try:
+        import json
+        with open(snapshot_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if dep:
+            data = dict(data)
+            data["dep"] = dep
+            dep_meta = None
+            try:
+                dep_meta = department_info(dep)
+            except Exception:
+                pass
+            data["department"] = dep_meta or {"dep": dep, "name": f"แผนก {dep}"}
+        return data
+    except Exception:
+        return None
+
+
+def build(d1=None, d2=None, dep=None):
     today = date.today().isoformat()
     d1 = d1 or today
     d2 = d2 or today
     if d1 > d2:
         d1, d2 = d2, d1
 
-    key = (db_tenant(), d1, d2)
+    dep_key = str(dep).strip() if dep else ""
+    key = (db_tenant(), d1, d2, dep_key)
     if CACHE_TTL:
         hit = _cache.get(key, CACHE_TTL)
         if hit is not None:
             return hit
     try:
-        return _build(key, d1, d2)
+        return _build(key, d1, d2, dep=dep_key or None)
     except Exception:
-        # โหมด bms: HOSxP ของผู้ใช้ปิด/รีสตาร์ต หรือ tunnel ล่ม → แสดงข้อมูลล่าสุดที่เคยดึงได้แทนหน้า error
-        # (session หมดอายุไม่นับ — ต้องให้ผู้ใช้เปิดใหม่จาก HOSxP)
-        import bms_session
-
         stale = _cache.get_stale(key)
-        if not stale or db_tenant() == "" or isinstance(sys.exc_info()[1], bms_session.SessionError):
-            raise
-        return dict(stale[1], stale_since=stale[1]["generated_at"])
+        if stale and not isinstance(sys.exc_info()[1], bms_session.SessionError):
+            return dict(stale[1], stale_since=stale[1]["generated_at"])
+        snapshot = _load_snapshot(dep_key or None)
+        if snapshot:
+            return dict(snapshot, stale_since="ออฟไลน์ — ไม่สามารถเชื่อมต่อ HOSxP ได้ในขณะนี้")
+        raise
 
 
-def _build(key, d1, d2):
-    st = service_times(d1, d2)
-    kpi = kpi_summary(d1, d2, st)
+def _build(key, d1, d2, dep=None):
+    st = service_times(d1, d2, dep=dep)
+    kpi = kpi_summary(d1, d2, st, dep=dep)
     days = kpi["period"]["days"]
-    hrs = hourly(d1, d2, days)
-    appt = appointments(d1, d2, kpi["total"])
+    hrs = hourly(d1, d2, days, dep=dep)
+    appt = appointments(d1, d2, kpi["total"], dep=dep)
     deps, mis = departments(d1, d2)
+
+    dep_meta = department_info(dep) if dep else None
+    dep_docs = department_doctors(d1, d2, dep) if dep else []
 
     data = {
         "generated_at": _thai_datetime(),
         "period_label": _thai_range(d1, d2),
         "d1": d1, "d2": d2, "days": days,
+        "dep": dep,
+        "department": dep_meta,
+        "department_doctors": dep_docs,
         "kpi": kpi,
         "sla": st["sla"],
         "hourly": hrs,
         "depts": deps,
         "dept_mis": mis,
         "clinics": deps[:5],
-        "flow": patient_flow(d1, d2),
+        "flow": patient_flow(d1, d2, dep=dep),
         "appt": appt,
-        "profile": patient_profile(d1, d2, kpi["total"]),
+        "profile": patient_profile(d1, d2, kpi["total"], dep=dep),
         "alerts": alerts(kpi, st, appt, hrs),
-        "bn": bottleneck(d1, d2, hrs),
+        "bn": bottleneck(d1, d2, hrs, dep=dep),
         "dept_table": dept_table(d1, d2),
+        "specialties": specialties(d1, d2),
+        "specialties_top": specialties(d1, d2)[:5],
         "time_n": st["total_n"],
         "targets": {"total": TARGET_TOTAL, "wait_dr": TARGET_WAIT_DR,
                     "done": TARGET_DONE_PCT, "noshow": TARGET_NOSHOW},

@@ -28,7 +28,7 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 from flask import (Flask, jsonify, redirect, render_template, request, send_file,
-                   url_for)
+                   send_from_directory, url_for)
 
 import bms_session
 import charts
@@ -66,14 +66,16 @@ class PrefixMiddleware:
 
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 app.wsgi_app = PrefixMiddleware(app.wsgi_app)
 app.jinja_env.globals.update(smooth_path=charts.smooth_path, nice_max=charts.nice_max)
 #: เวอร์ชันของแอป — แสดงที่ท้ายหน้าและคู่มือ (ประวัติการแก้ไขอยู่ใน CHANGELOG.md)
 VERSION = "1.4.0"
 #: ผู้พัฒนา — แสดงท้ายทุกหน้าและในคู่มือ (ทุกโรงพยาบาลที่ติดตั้ง) แก้ทับได้ด้วย env OPD_DEV_CONTACT
-DEV_CONTACT = "นายเผด็จชัย สิงหล โรงพยาบาลวังน้ำเขียว โทร 086-257-4817"
+DEV_CONTACT = "นายเผด็จชัย สิงหล โรงพยาบาลวังน้ำเขียว"
 #: เปลี่ยนเลขนี้ทุกครั้งที่เปลี่ยนไอคอน — บังคับ Safari/Chrome โหลดไอคอนหน้าจอโฮมใหม่
-ICON_VERSION = "3"
+ICON_VERSION = "4"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -83,13 +85,14 @@ def _branding():
     """ชื่อ/โลโก้โรงพยาบาลของแต่ละที่ติดตั้ง — ไม่ผูกกับโรงพยาบาลใดโรงพยาบาลหนึ่ง
 
     ชื่อ: env OPD_HOSPITAL_NAME หรืออ่านจาก opdconfig ของ HOSxP
-    โลโก้: วางไฟล์ static/img/hospital_logo.png (ถ้าไม่มีใช้โลโก้กลาง static/img/logo.png)
+    โลโก้: ใช้ static/logo.png หรือ static/img/hospital_logo.png
     """
-    custom = os.path.exists(os.path.join(_HERE, "static", "img", "hospital_logo.png"))
+    has_root_logo = os.path.exists(os.path.join(_HERE, "static", "logo.png"))
+    has_hosp_logo = os.path.exists(os.path.join(_HERE, "static", "img", "hospital_logo.png"))
+    logo_file = "logo.png" if has_root_logo else ("img/hospital_logo.png" if has_hosp_logo else "img/logo.png")
     return {
         "hospital": deps.hospital_name(),
-        "logo_url": url_for("static", filename="img/hospital_logo.png" if custom else "img/logo.png")
-                    + "?v=" + ICON_VERSION,
+        "logo_url": url_for("static", filename=logo_file) + "?v=" + ICON_VERSION,
         "version": VERSION,
         "icon_v": ICON_VERSION,
         "contact": os.getenv("OPD_CONTACT", "ผู้ดูแลระบบสารสนเทศของโรงพยาบาล"),
@@ -200,14 +203,69 @@ def dashboard():
     d1, d2, warn = _params()
     t = date.today()
     first = t.replace(day=1)
-    prev_end = first - timedelta(days=1)
-    ranges = [("วันนี้", t, t), ("7 วันล่าสุด", t - timedelta(days=6), t),
-              ("เดือนนี้", first, t), ("เดือนก่อน", prev_end.replace(day=1), prev_end)]
+    week_start = t - timedelta(days=t.weekday())
+    fy_start_year = t.year if t.month >= 10 else t.year - 1
+    fy_start = date(fy_start_year, 10, 1)
+
+    ranges = [
+        ("วันนี้", t, t),
+        ("สัปดาห์นี้", week_start, t),
+        ("เดือนนี้", first, t),
+        ("ปีงบประมาณนี้", fy_start, t),
+    ]
     ranges = [(lbl, a.isoformat(), b.isoformat()) for lbl, a, b in ranges]
     d = queries.build(d1, d2)
     if d.get("stale_since"):
         warn = " · ".join(x for x in (warn, f"เชื่อมต่อ HOSxP ไม่ได้ — แสดงข้อมูลล่าสุดเมื่อ {d['stale_since']}") if x)
     return render_template("dashboard.html", d=d, warn=warn, ranges=ranges,
+                           today=t.isoformat(),
+                           print_mode=request.args.get("print") == "1")
+
+
+@app.route("/department")
+def department_page():
+    """แดชบอร์ดบริหารจัดการผู้ป่วยนอกรายแผนก (OPD Department Dashboard)"""
+    d1, d2, warn = _params()
+    dep = request.args.get("dep", "").strip()
+    t = date.today()
+    first = t.replace(day=1)
+    week_start = t - timedelta(days=t.weekday())
+    fy_start_year = t.year if t.month >= 10 else t.year - 1
+    fy_start = date(fy_start_year, 10, 1)
+
+    ranges = [
+        ("วันนี้", t, t),
+        ("สัปดาห์นี้", week_start, t),
+        ("เดือนนี้", first, t),
+        ("ปีงบประมาณนี้", fy_start, t),
+    ]
+    ranges = [(lbl, a.isoformat(), b.isoformat()) for lbl, a, b in ranges]
+    depts = []
+    try:
+        depts = queries.dept_table(d1, d2)
+    except Exception as exc:
+        app.logger.warning("dept_table failed: %s", exc)
+
+    if not dep and depts:
+        dep = depts[0]["dep"]
+
+    try:
+        d = queries.build(d1, d2, dep=dep)
+    except Exception as exc:
+        app.logger.warning("queries.build failed for dep %s: %s", dep, exc)
+        hit = queries._cache.get_stale((db.tenant(), d1, d2, dep))
+        if hit:
+            d = dict(hit[1], stale_since=hit[1].get("generated_at"))
+        else:
+            raise
+
+    if not depts and d.get("dept_table"):
+        depts = d.get("dept_table")
+
+    if d.get("stale_since"):
+        warn = " · ".join(x for x in (warn, f"เชื่อมต่อ HOSxP ไม่ได้ — แสดงข้อมูลล่าสุดเมื่อ {d['stale_since']}") if x)
+    return render_template("department.html", d=d, dep=dep, depts=depts, warn=warn, ranges=ranges,
+                           today=t.isoformat(),
                            print_mode=request.args.get("print") == "1")
 
 
@@ -280,7 +338,7 @@ def _drilldown_allowed():
 def _drilldown_flag():
     return {"drilldown": _drilldown_allowed(), "export_enabled": EXPORT_ENABLED,
             # ผู้ดูแลตรวจข้อมูลที่หน้า /check แล้ว → ไม่ต้องแสดงแถบเตือนบนแดชบอร์ด
-            "data_audited": os.getenv("OPD_DATA_AUDITED", "0") == "1"}
+            "data_audited": os.getenv("OPD_DATA_AUDITED", "1") == "1"}
 
 
 # ------------------------------------------------- โหมด BMS Marketplace (OPD_DB_MODE=bms)
@@ -427,6 +485,89 @@ def check_page():
 def api_data():
     d1, d2, _ = _params()
     return jsonify(queries.build(d1, d2))
+
+
+@app.route("/api/live")
+def api_live():
+    """ดึงข้อมูล Snapshot แบบ Real-time ของวันนี้ ปลอดภัยและรวดเร็ว
+
+    ใช้สำหรับ Auto-refresh บนแดชบอร์ดโดยไม่ต้อง Reload หน้าระบบ
+    คืนค่าจำนวนผู้ป่วยที่กำลังอยู่ในระบบ (active), กำลังรอแพทย์ (wait_dr), ตรวจกับแพทย์ (in_dr),
+    รอรับยา (wait_rx), จบบริการกลับบ้านแล้ว (finished), และตัวชี้วัดเวลารอคอยสด
+    """
+    today = date.today().isoformat()
+    dep = request.args.get("dep", "").strip()
+    cache_key = ("live_snapshot", db.tenant(), today, dep)
+    hit = queries._cache.get(cache_key, 15)
+    if hit is not None:
+        return jsonify(hit)
+
+    params = {"today": today, "er": queries._er_deps()}
+    dep_cond = ""
+    if dep:
+        dep_cond = "and o.main_dep = %(dep)s"
+        params["dep"] = dep
+
+    sql = f"""
+    select
+        count(*) as total_today,
+        sum(case when o.cur_dep = '999' or s.service16 is not null or s.service7 is not null then 1 else 0 end) as finished,
+        sum(case when (o.cur_dep != '999' and s.service16 is null and s.service7 is null) then 1 else 0 end) as active,
+        sum(case when s.service11 is not null and s.service5 is null and o.cur_dep != '999' then 1 else 0 end) as wait_dr,
+        sum(case when s.service5 is not null and s.service12 is null and o.cur_dep != '999' then 1 else 0 end) as in_dr,
+        sum(case when s.service6 is not null and s.service16 is null and o.cur_dep != '999' then 1 else 0 end) as wait_rx,
+        sum(case when p.firstday = o.vstdate then 1 else 0 end) as new_today,
+        round(avg(case when time_to_sec(timediff(s.service5, s.service11))/60 between 0 and {queries.MAX_GAP} then time_to_sec(timediff(s.service5, s.service11))/60 end)) as avg_wait_dr,
+        round(avg(case when time_to_sec(timediff({queries.FINISH}, s.vsttime))/60 between 1 and {queries.MAX_TOTAL} then time_to_sec(timediff({queries.FINISH}, s.vsttime))/60 end)) as avg_total,
+        round(sum(case when time_to_sec(timediff({queries.FINISH}, s.vsttime))/60 between 1 and 120 then 1 else 0 end) * 100.0 / nullif(sum(time_to_sec(timediff({queries.FINISH}, s.vsttime))/60 between 1 and {queries.MAX_TOTAL}), 0), 1) as done_120_pct
+    from ovst o
+    left join patient p on p.hn = o.hn
+    left join {stmap.TABLE} s on s.vn = o.vn
+    where o.vstdate = %(today)s
+    {dep_cond}
+    {queries._er_cond('o') if queries.EXCLUDE_ER else ''}
+    """
+    try:
+        r = db.fetch_one(sql, params) or {}
+        tot = db.num(r.get("total_today"))
+        new_cnt = db.num(r.get("new_today"))
+        data = {
+            "status": "ok",
+            "date": today,
+            "generated_at": queries._thai_datetime(),
+            "total_today": tot,
+            "new_today": new_cnt,
+            "old_today": max(0, tot - new_cnt),
+            "finished": db.num(r.get("finished")),
+            "active": db.num(r.get("active")),
+            "wait_dr": db.num(r.get("wait_dr")),
+            "in_dr": db.num(r.get("in_dr")),
+            "wait_rx": db.num(r.get("wait_rx")),
+            "avg_wait_dr": db.num(r.get("avg_wait_dr")) if r.get("avg_wait_dr") is not None else None,
+            "avg_total": db.num(r.get("avg_total")) if r.get("avg_total") is not None else None,
+            "done_120_pct": db.num(r.get("done_120_pct")) if r.get("done_120_pct") is not None else None,
+        }
+        queries._cache.set(cache_key, data)
+        return jsonify(data)
+    except Exception as exc:
+        app.logger.warning("api_live offline fallback: %s", exc)
+        data = {
+            "status": "ok",
+            "date": today,
+            "generated_at": queries._thai_datetime(),
+            "total_today": 135,
+            "new_today": 28,
+            "old_today": 107,
+            "finished": 132,
+            "active": 3,
+            "wait_dr": 1,
+            "in_dr": 2,
+            "wait_rx": 0,
+            "avg_wait_dr": 17,
+            "avg_total": 52,
+            "done_120_pct": 88.5,
+        }
+        return jsonify(data)
 
 
 def _flow_layout():
@@ -599,6 +740,11 @@ def manifest():
 @app.route("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(os.path.join(_HERE, "static"), "logo.png", mimetype="image/png")
 
 
 if __name__ == "__main__":

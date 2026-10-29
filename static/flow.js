@@ -119,7 +119,7 @@
   // ไม่ให้ซ้ำกับกางเกงชมพูของผู้หญิง · 6 = ช่องทางพิเศษ OPD (ผู้สูงอายุ / พระภิกษุ / ผู้พิการ)
   var SHIRT = { 1: '#dc2626', 2: '#f97316', 3: '#facc15', 4: '#22c55e', 5: '#ffffff', 6: '#8b5cf6' };
   var PANTS = { 1: '#3b82f6', 2: '#f472b6', 0: '#64748b' };   // ชาย ฟ้า · หญิง ชมพู · ไม่ระบุ เทา
-  var MOOD = { mid: '😤', high: '😡' };                         // รอเกินเป้า / เกิน 1.5 เท่า
+  var MOOD = { mid: 'sentiment_dissatisfied', high: 'sentiment_very_dissatisfied' };                         // รอเกินเป้า / เกิน 1.5 เท่า
   var URG_NAME = { 1: 'วิกฤต', 2: 'ฉุกเฉิน', 3: 'เร่งด่วน', 4: 'กึ่งเร่งด่วน', 5: 'ทั่วไป', 6: 'สูงอายุ / พระภิกษุ / ผู้พิการ' };
   var hover = null;         // หุ่นที่เมาส์ชี้ / แตะอยู่
   function level(mins, target) {
@@ -261,7 +261,7 @@
       var prevEnter = p.enter;
       if (seg) { inside++; p.enter = seg[0]; p.total = v.s[0][0]; }
       if (to !== p.area) {
-        // ❤️ ได้รับบริการทันเวลา: ออกจากจุดเดิมภายในเป้าหมายของจุดนั้น
+        // ได้รับบริการทันเวลา: ออกจากจุดเดิมภายในเป้าหมายของจุดนั้น
         if (!jump && p.area >= 0 && p.vis) {
           var fa = areas[p.area], leftAt = seg ? seg[0] : v.e;
           // นับเฉพาะจุดที่ "รอ" (ไม่นับห้องบัตรที่ผ่านใน 2 นาทีทุกคน และเวลาอยู่ในห้องตรวจ)
@@ -528,15 +528,16 @@
     ctx.fillStyle = '#3b2f2a';     // ผมด้านบน (ผู้ชายสั้น ผู้หญิงมีหน้าม้า)
     ctx.beginPath(); ctx.arc(x, hy - 0.05 * k, hr, Math.PI * (p.g === 2 ? 0.95 : 1.05), Math.PI * (p.g === 2 ? 2.05 : 1.95)); ctx.fill();
     ctx.globalAlpha = 1;
-    // ❤️ ได้รับบริการทันเวลา — ลอยขึ้นแล้วจางหาย 2.5 วินาที (แสดงแทนหัวร้อนชั่วคราว)
+    // Material Symbol favorite (หัวใจ) ได้รับบริการทันเวลา — ลอยขึ้นแล้วจางหาย 2.5 วินาที
     var ht = p.heart ? performance.now() - p.heart : 1e9;
     if (ht < 2500 && cam.k >= 4) {
       var f = ht / 2500;
       ctx.globalAlpha = Math.min(1, (1 - f) * 1.6);
+      ctx.fillStyle = '#ef4444';
       ctx.font = Math.round(0.6 * k * (1 + 0.25 * Math.sin(Math.min(1, f * 4) * Math.PI))) +
-        'px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+        'px "Material Symbols Outlined", sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText('❤️', x, hy - hr - 0.05 * k - f * 0.9 * k);
+      ctx.fillText('favorite', x, hy - hr - 0.05 * k - f * 0.9 * k);
       ctx.textAlign = 'left'; ctx.globalAlpha = 1;
       return;
     }
@@ -544,7 +545,8 @@
     var mood = areas[p.area] && !areas[p.area].nowait ? MOOD[p.lv] : null;
     if (mood && cam.k >= 6 && !p.leaving) {
       var bob = Math.sin(performance.now() / 260 + p.x * 3) * 0.06 * k;
-      ctx.font = Math.round((p.lv === 'high' ? 0.62 : 0.5) * k) + 'px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+      ctx.fillStyle = p.lv === 'high' ? '#dc2626' : '#f59e0b';
+      ctx.font = Math.round((p.lv === 'high' ? 0.62 : 0.5) * k) + 'px "Material Symbols Outlined", sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.fillText(mood, x, hy - hr - 0.05 * k + bob);
       ctx.textAlign = 'left';
@@ -965,7 +967,7 @@
     syncButtons();
   }
   function syncButtons() {
-    $('btnPlay').textContent = state.playing && !state.live ? '❚❚' : '▶';
+    $('btnPlay').innerHTML = state.playing && !state.live ? '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:-2px">pause</span>' : '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:-2px">play_arrow</span>';
     $('btnPlay').classList.toggle('on', state.playing && !state.live);
     document.querySelectorAll('#speeds button').forEach(function (b) {
       b.classList.toggle('on', !state.live && +b.dataset.s === state.speed);
