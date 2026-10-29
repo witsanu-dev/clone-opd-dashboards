@@ -5,4 +5,5 @@ Pillow
 gunicorn; sys_platform != "win32"
 waitress; sys_platform == "win32"
 requests
+contextvars; python_version < "3.7"
 dataclasses; python_version < "3.7"

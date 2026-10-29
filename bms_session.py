@@ -15,13 +15,46 @@
 (contextvar) ห้ามเก็บ token ลง log หรือ URL
 """
 
-import contextvars
 import os
 import re
 import threading
 import time
-from dataclasses import dataclass
 from urllib.parse import urlsplit
+
+try:
+    import contextvars
+except ImportError:
+    class _ContextVar:
+        def __init__(self, name, default=None):
+            self._name = name
+            self._default = default
+            self._local = threading.local()
+
+        def get(self, default=None):
+            return getattr(self._local, "val", self._default if default is None else default)
+
+        def set(self, val):
+            self._local.val = val
+
+    class _ContextVarsModule:
+        ContextVar = _ContextVar
+
+    contextvars = _ContextVarsModule()
+
+try:
+    from dataclasses import dataclass
+except ImportError:
+    def dataclass(cls=None, **kwargs):
+        def _wrap(c):
+            def __init__(self, *args, **kw):
+                annotations = getattr(c, "__annotations__", {})
+                for k, v in zip(annotations.keys(), args):
+                    setattr(self, k, v)
+                for k, v in kw.items():
+                    setattr(self, k, v)
+            c.__init__ = __init__
+            return c
+        return _wrap(cls) if cls is not None else _wrap
 
 import requests
 
