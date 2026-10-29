@@ -25,6 +25,13 @@ import os
 import sys
 from datetime import date, datetime, timedelta
 
+
+def _parse_date(s):
+    if isinstance(s, date):
+        return s
+    y, m, d = (int(x) for x in str(s)[:10].split("-"))
+    return date(y, m, d)
+
 import deps
 import stmap
 from cache import TTLCache
@@ -113,8 +120,8 @@ def _delta(cur, prev):
 
 
 def _prev_period(d1, d2):
-    span = (date.fromisoformat(d2) - date.fromisoformat(d1)).days + 1
-    p2 = date.fromisoformat(d1) - timedelta(days=1)
+    span = (_parse_date(d2) - _parse_date(d1)).days + 1
+    p2 = _parse_date(d1) - timedelta(days=1)
     p1 = p2 - timedelta(days=span - 1)
     return p1.isoformat(), p2.isoformat(), span
 
@@ -1103,12 +1110,12 @@ TH_MONTH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "�
 
 
 def _thai_date(d):
-    d = date.fromisoformat(d) if isinstance(d, str) else d
+    d = _parse_date(d) if isinstance(d, str) else d
     return f"{d.day} {TH_MONTH[d.month - 1]} {d.year + 543}"
 
 
 def _thai_range(d1, d2):
-    a, b = date.fromisoformat(d1), date.fromisoformat(d2)
+    a, b = _parse_date(d1), _parse_date(d2)
     if a == b:
         return f"วันที่ {_thai_date(a)}"
     if a.month == b.month and a.year == b.year:

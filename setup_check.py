@@ -136,7 +136,9 @@ def check_db():
     say("ok", f"ต่อฐานข้อมูลได้: {r.get('v')} · ฐาน {r.get('d')}")
 
     try:
-        db_now = datetime.fromisoformat(str(r.get("n")))
+        n_str = str(r.get("n"))[:19]
+        fmt = "%Y-%m-%d %H:%M:%S" if " " in n_str else ("%Y-%m-%dT%H:%M:%S" if "T" in n_str else "%Y-%m-%d")
+        db_now = datetime.strptime(n_str, fmt)
         diff = abs((db_now - datetime.now()).total_seconds()) / 60
         if diff > 5:
             say("warn", f"เวลาฐานข้อมูล ({db_now:%H:%M}) ต่างจากเครื่องนี้ {diff:.0f} นาที — ตรวจเขตเวลาของทั้งสองเครื่อง")
@@ -180,7 +182,8 @@ def check_db():
     if not last:
         say("fail", "ตาราง ovst ไม่มี visit เลย")
         return False
-    age = (date.today() - date.fromisoformat(str(last)[:10])).days
+    last_p = [int(x) for x in str(last)[:10].split("-")]
+    age = (date.today() - date(last_p[0], last_p[1], last_p[2])).days
     say("ok" if age <= 3 else "warn",
         f"visit ล่าสุดวันที่ {last}" + ("" if age <= 3 else f" ({age} วันก่อน) — ใช่ฐานข้อมูลที่ใช้งานจริงหรือไม่ (replica ไม่อัปเดต?)"))
     return True

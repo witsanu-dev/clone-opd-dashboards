@@ -198,8 +198,8 @@ def _params():
         d1, d2 = min(d1, today), min(d2, today)
     if d1 > d2:
         d1, d2 = d2, d1
-    if (date.fromisoformat(d2) - date.fromisoformat(d1)).days >= MAX_DAYS:
-        d1 = (date.fromisoformat(d2) - timedelta(days=MAX_DAYS - 1)).isoformat()
+    if (_parse_date(d2) - _parse_date(d1)).days >= MAX_DAYS:
+        d1 = (_parse_date(d2) - timedelta(days=MAX_DAYS - 1)).isoformat()
         warn.append(f"เลือกได้ไม่เกิน {MAX_DAYS} วันต่อครั้ง — แสดง {MAX_DAYS} วันสุดท้ายของช่วงที่เลือก")
     return d1, d2, " · ".join(warn)
 
@@ -482,7 +482,7 @@ def check_page():
         return _lan_only_page("ตรวจข้อมูล")
     d1, d2, warn = _params()
     if not request.args.get("d1"):
-        d1 = (date.fromisoformat(d2) - timedelta(days=6)).isoformat()
+        d1 = (_parse_date(d2) - timedelta(days=6)).isoformat()
     return render_template("check.html", c=check.run(d1, d2), d1=d1, d2=d2, warn=warn,
                            period=queries._thai_range(d1, d2))
 
