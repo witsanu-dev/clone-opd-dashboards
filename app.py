@@ -17,6 +17,12 @@ from datetime import date, timedelta
 from io import BytesIO
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
+
+try:
     import fcntl                # Linux/macOS — ล็อกไฟล์ข้ามโปรเซส (gunicorn หลาย worker)
 except ImportError:             # Windows รันด้วย waitress โปรเซสเดียว ใช้ threading.Lock พอ
     fcntl = None
@@ -748,8 +754,8 @@ def favicon():
 
 
 if __name__ == "__main__":
-    # debug ปิดเป็นค่าเริ่มต้น — ตัว debugger ของ Werkzeug สั่งรันโค้ดบนเครื่องได้
-    # เปิดด้วย FLASK_DEBUG=1 เฉพาะตอนพัฒนา และจะฟังแค่ 127.0.0.1 (เครื่องอื่นใน LAN เข้าไม่ได้)
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
-    app.run(host="127.0.0.1" if debug else os.getenv("OPD_HOST", "0.0.0.0"),
-            port=int(os.getenv("PORT", "5900")), debug=debug)
+    host = "127.0.0.1" if debug else os.getenv("OPD_HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "1335"))
+    print(f" * Starting OPD Dashboard on http://{host}:{port}/")
+    app.run(host=host, port=port, debug=debug)
