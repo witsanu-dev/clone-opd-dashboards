@@ -1,9 +1,8 @@
-Flask>=3.0
-PyMySQL>=1.1
-python-dotenv>=1.0
-Pillow>=10.0
-gunicorn>=21.2; sys_platform != "win32"
-waitress>=3.0; sys_platform == "win32"
-requests>=2.33; python_version >= "3.10"
-# Python 3.9 (AlmaLinux 9 ค่าเริ่มต้น) — 2.33 ขึ้นไปต้องการ 3.10
-requests>=2.32.5; python_version < "3.10"
+Flask>=2.0
+PyMySQL
+python-dotenv
+Pillow
+gunicorn; sys_platform != "win32"
+waitress; sys_platform == "win32"
+requests
+dataclasses; python_version < "3.7"
